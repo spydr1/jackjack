@@ -97,8 +97,8 @@ class SuperResolutionTask(base_task.Task):
                     tf_keras.layers.Rescaling(scale=1.0 / 255.),
                 ]
             )
-
-            crop_layer = tf_keras.layers.RandomCrop(h, w)
+            with tf.device("cpu"):
+                crop_layer = tf_keras.layers.RandomCrop(h, w)
             kernel_layer = self.get_kernel_layer()
             degradation_layer: DegradationV3 = self.get_degradation_layer(
                 target_image_shape=params.target_image_shape,  # todo
