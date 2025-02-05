@@ -97,8 +97,7 @@ class SuperResolutionTask(base_task.Task):
                     tf_keras.layers.Rescaling(scale=1.0 / 255.),
                 ]
             )
-            with tf.device("cpu"):
-                crop_layer = tf_keras.layers.RandomCrop(h, w)
+            crop_layer = tf_keras.layers.RandomCrop(h, w)
 
             kernel_layer = self.get_kernel_layer()
             degradation_layer: DegradationV3 = self.get_degradation_layer(
@@ -118,8 +117,8 @@ class SuperResolutionTask(base_task.Task):
                 return parsed_tensors
 
             def keras_degradation(parsed_tensors: dict):
-                gpus = tf.config.list_physical_devices('GPU')
-                tpus = tf.config.list_physical_devices('TPU')
+                # gpus = tf.config.list_physical_devices('GPU')
+                # tpus = tf.config.list_physical_devices('TPU')
 
                 # if tpus:
                 #     device = tf.device("tpu")
@@ -149,10 +148,12 @@ class SuperResolutionTask(base_task.Task):
                     image_paths,
                     batch_size=1,
                     shuffle_size=4, ):
-                dataset = tf.data.Dataset.from_tensor_slices((image_paths))
-                dataset = dataset.shuffle(shuffle_size)
-                dataset = dataset.map(read_image, num_parallel_calls=AUTO)  # .batch(batch_size)
-                dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
+
+                with tf.device("cpu"):
+                    dataset = tf.data.Dataset.from_tensor_slices((image_paths))
+                    dataset = dataset.shuffle(shuffle_size)
+                    dataset = dataset.map(read_image, num_parallel_calls=AUTO)  # .batch(batch_size)
+                    dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
                 dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
                 dataset = dataset.map(get_kernel, num_parallel_calls=AUTO)  # .batch(batch_size)
 
@@ -160,10 +161,9 @@ class SuperResolutionTask(base_task.Task):
                 # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
                 return dataset.prefetch(AUTO)
 
-            with tf.device("cpu"):
                 dataset = prepare_dataset(training_image_paths,
-                                          shuffle_size=params.shuffle_buffer_size,
-                                          batch_size=params.global_batch_size)
+                                      shuffle_size=params.shuffle_buffer_size,
+                                      batch_size=params.global_batch_size)
 
             return dataset.repeat()
 
