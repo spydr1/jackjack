@@ -115,7 +115,19 @@ class SuperResolutionTask(base_task.Task):
                 return parsed_tensors
 
             def keras_degradation(parsed_tensors: dict):
-                with tf.device("gpu"):
+                gpus = tf.config.list_physical_devices('GPU')
+                tpus = tf.config.list_physical_devices('TPU')
+
+                if tpus:
+                    device = tf.device("tpu")
+                elif gpus:
+                    device = tf.device("gpu")
+                else :
+                    device = tf.device("cpu")
+
+                # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
+
+                with device:
                     degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
                                                            kernel1=parsed_tensors["kernel1"],
                                                            kernel2=parsed_tensors["kernel2"],
