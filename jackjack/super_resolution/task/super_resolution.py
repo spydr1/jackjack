@@ -107,8 +107,7 @@ class SuperResolutionTask(base_task.Task):
             )
 
             def crop_image(parsed_tensors: dict):
-                with tf.device("cpu"):
-                    cropped_image = crop_layer(parsed_tensors["input_raw_image"])
+                cropped_image = crop_layer(parsed_tensors["input_raw_image"])
 
                 parsed_tensors.update(
                     {"input_raw_image": cropped_image})
@@ -122,17 +121,17 @@ class SuperResolutionTask(base_task.Task):
                 gpus = tf.config.list_physical_devices('GPU')
                 tpus = tf.config.list_physical_devices('TPU')
 
-                if tpus:
-                    device = tf.device("tpu")
-                elif gpus:
-                    device = tf.device("gpu")
-                else :
-                    device = tf.device("cpu")
-
-                # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
-
-                with device:
-                    degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
+                # if tpus:
+                #     device = tf.device("tpu")
+                # elif gpus:
+                #     device = tf.device("gpu")
+                # else :
+                #     device = tf.device("cpu")
+                #
+                # # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
+                #
+                # with device:
+                degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
                                                            kernel1=parsed_tensors["kernel1"],
                                                            kernel2=parsed_tensors["kernel2"],
                                                            sinc_kernel=parsed_tensors["sinc_kernel"],
@@ -161,9 +160,10 @@ class SuperResolutionTask(base_task.Task):
                 # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
                 return dataset.prefetch(AUTO)
 
-            dataset = prepare_dataset(training_image_paths,
-                                      shuffle_size=params.shuffle_buffer_size,
-                                      batch_size=params.global_batch_size)
+            with tf.device("cpu"):
+                dataset = prepare_dataset(training_image_paths,
+                                          shuffle_size=params.shuffle_buffer_size,
+                                          batch_size=params.global_batch_size)
 
             return dataset.repeat()
 
