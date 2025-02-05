@@ -12,7 +12,7 @@ from official.core.base_task import OptimizationConfig, RuntimeConfig, Different
 from jackjack.super_resolution.basicsr.legacy.v2.data.degradations import DegradationV3
 from jackjack.super_resolution.basicsr.legacy.v2.data.real_esrgan_dataset import RealESRGANDataset
 from jackjack.super_resolution.config.super_resolution import SuperResolutionTask, DataConfig, Degradation
-from jackjack.super_resolution.drct.legacy.drct_keras2 import DRCT
+from jackjack.super_resolution.drct.legacy.v2.drct import DRCT
 
 
 @task_factory.register_task_cls(SuperResolutionTask)
