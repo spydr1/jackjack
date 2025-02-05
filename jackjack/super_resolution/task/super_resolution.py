@@ -99,6 +99,7 @@ class SuperResolutionTask(base_task.Task):
             )
             with tf.device("cpu"):
                 crop_layer = tf_keras.layers.RandomCrop(h, w)
+
             kernel_layer = self.get_kernel_layer()
             degradation_layer: DegradationV3 = self.get_degradation_layer(
                 target_image_shape=params.target_image_shape,  # todo
@@ -106,8 +107,11 @@ class SuperResolutionTask(base_task.Task):
             )
 
             def crop_image(parsed_tensors: dict):
+                with tf.device("cpu"):
+                    cropped_image = crop_layer(parsed_tensors["input_raw_image"])
+
                 parsed_tensors.update(
-                    {"input_raw_image": crop_layer(parsed_tensors["input_raw_image"])})
+                    {"input_raw_image": cropped_image})
                 return parsed_tensors
 
             def keras_augment(parsed_tensors: dict):
