@@ -87,6 +87,8 @@ class SuperResolutionTask(base_task.Task):
                 """
                 raw = tf.io.read_file(image_path)
                 image = tf.io.decode_png(raw, 3)
+                # image = tf.image.random_crop(value=image, size=(h, w, 3))
+
                 result = {"input_raw_image": image}
                 return result  # , image.shape
 
@@ -117,20 +119,20 @@ class SuperResolutionTask(base_task.Task):
                 return parsed_tensors
 
             def keras_degradation(parsed_tensors: dict):
-                # gpus = tf.config.list_physical_devices('GPU')
-                # tpus = tf.config.list_physical_devices('TPU')
+                gpus = tf.config.list_physical_devices('GPU')
+                tpus = tf.config.list_physical_devices('TPU')
 
-                # if tpus:
-                #     device = tf.device("tpu")
-                # elif gpus:
-                #     device = tf.device("gpu")
-                # else :
-                #     device = tf.device("cpu")
+                if tpus:
+                    device = tf.device("tpu")
+                elif gpus:
+                    device = tf.device("gpu")
+                else:
+                    device = tf.device("cpu")
                 #
                 # # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
                 #
-                # with device:
-                degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
+                with device:
+                    degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
                                                            kernel1=parsed_tensors["kernel1"],
                                                            kernel2=parsed_tensors["kernel2"],
                                                            sinc_kernel=parsed_tensors["sinc_kernel"],
@@ -152,7 +154,7 @@ class SuperResolutionTask(base_task.Task):
                 with tf.device("cpu"):
                     dataset = tf.data.Dataset.from_tensor_slices((image_paths))
                     dataset = dataset.shuffle(shuffle_size)
-                    dataset = dataset.map(read_image, num_parallel_calls=AUTO)  # .batch(batch_size)
+                    dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
                     dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
                 dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
                 dataset = dataset.map(get_kernel, num_parallel_calls=AUTO)  # .batch(batch_size)
@@ -162,8 +164,8 @@ class SuperResolutionTask(base_task.Task):
                 return dataset.prefetch(AUTO)
 
             dataset = prepare_dataset(training_image_paths,
-                                  shuffle_size=params.shuffle_buffer_size,
-                                  batch_size=params.global_batch_size)
+                                      shuffle_size=params.shuffle_buffer_size,
+                                      batch_size=params.global_batch_size)
 
             return dataset.repeat()
 
