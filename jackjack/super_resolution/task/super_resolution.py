@@ -161,9 +161,9 @@ class SuperResolutionTask(base_task.Task):
                 # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
                 return dataset.prefetch(AUTO)
 
-                dataset = prepare_dataset(training_image_paths,
-                                      shuffle_size=params.shuffle_buffer_size,
-                                      batch_size=params.global_batch_size)
+            dataset = prepare_dataset(training_image_paths,
+                                  shuffle_size=params.shuffle_buffer_size,
+                                  batch_size=params.global_batch_size)
 
             return dataset.repeat()
 
