@@ -8,6 +8,7 @@ from typing import Any, List, Optional, Tuple, Union
 from official.core import task_factory
 from official.core import base_task
 from official.core.base_task import OptimizationConfig, RuntimeConfig, DifferentialPrivacyConfig
+from official.vision.dataloaders import input_reader_factory
 
 from jackjack.super_resolution.basicsr.legacy.v2.data.degradations import DegradationV3
 from jackjack.super_resolution.basicsr.legacy.v2.data.real_esrgan_dataset import RealESRGANDataset
@@ -63,9 +64,10 @@ class SuperResolutionTask(base_task.Task):
 
         return model
 
-    def build_inputs(self,
-                     params: DataConfig,
-                     input_context: Optional[tf.distribute.InputContext] = None):
+
+    def inputs_for_gpu(self,
+                       params: DataConfig,
+                       input_context: Optional[tf.distribute.InputContext] = None):
 
         AUTO = tf.data.AUTOTUNE
         if params.is_kaggle_dataset and params.is_training and params.input_path != '':
@@ -119,19 +121,10 @@ class SuperResolutionTask(base_task.Task):
                 return parsed_tensors
 
             def keras_degradation(parsed_tensors: dict):
-                gpus = tf.config.list_physical_devices('GPU')
-                tpus = tf.config.list_physical_devices('TPU')
 
-                if tpus:
-                    device = tf.device("tpu")
-                elif gpus:
-                    device = tf.device("gpu")
-                else:
-                    device = tf.device("cpu")
-                #
                 # # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
                 #
-                with device:
+                with tf.device("gpu"):
                     degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
                                                            kernel1=parsed_tensors["kernel1"],
                                                            kernel2=parsed_tensors["kernel2"],
@@ -151,11 +144,10 @@ class SuperResolutionTask(base_task.Task):
                     batch_size=1,
                     shuffle_size=4, ):
 
-                with tf.device("cpu"):
-                    dataset = tf.data.Dataset.from_tensor_slices((image_paths))
-                    dataset = dataset.shuffle(shuffle_size)
-                    dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
-                    dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
+                dataset = tf.data.Dataset.from_tensor_slices((image_paths))
+                dataset = dataset.shuffle(shuffle_size)
+                dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
+                dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
                 dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
                 dataset = dataset.map(get_kernel, num_parallel_calls=AUTO)  # .batch(batch_size)
 
@@ -167,8 +159,103 @@ class SuperResolutionTask(base_task.Task):
                                       shuffle_size=params.shuffle_buffer_size,
                                       batch_size=params.global_batch_size)
 
+            input_reader_factory.input_reader_generator(
+
+            )
+
             return dataset.repeat()
 
+
+
+    def inputs_for_tpu(self,
+                       params: DataConfig,
+                       input_context: Optional[tf.distribute.InputContext] = None):
+
+        tf.print("******************************************")
+        tf.print("************* inputs for tpu**************")
+        tf.print("******************************************")
+        AUTO = tf.data.AUTOTUNE
+
+
+        if params.is_kaggle_dataset and params.is_training and params.input_path != '':
+            path = kagglehub.dataset_download(params.input_path)
+            training_image_paths = glob.glob(f"{path}/train/**/*.png", recursive=True)
+
+            # h, w, _ = params.cropped_image_shape
+            h, w, _ = params.target_image_shape
+            assert h == w, "Input must be square sized image."
+            rotation_range = 0.25  # todo
+
+            def read_image(image_path):
+                """
+                read image and crop.
+                Small image will be padded. Larger image will be cropped.
+
+                :param image_path:
+                :return:
+                """
+                raw = tf.io.read_file(image_path)
+                image = tf.io.decode_png(raw, 3)
+                # image = tf.image.random_crop(value=image, size=(h, w, 3))
+
+                result = {"input_raw_image": image}
+                return result  # , image.shape
+
+            augmenter = tf_keras.Sequential(
+                layers=[
+                    tf_keras.layers.RandomFlip(),
+                    tf_keras.layers.RandomRotation(rotation_range),
+                    tf_keras.layers.Rescaling(scale=1.0 / 255.),
+                ]
+            )
+            crop_layer = tf_keras.layers.RandomCrop(h, w)
+
+            def crop_image(parsed_tensors: dict):
+                cropped_image = crop_layer(parsed_tensors["input_raw_image"])
+
+                parsed_tensors.update(
+                    {"input_raw_image": cropped_image})
+                return parsed_tensors
+
+            def keras_augment(parsed_tensors: dict):
+                parsed_tensors.update({"input_raw_image": augmenter(parsed_tensors["input_raw_image"])})
+                return parsed_tensors
+
+
+            def prepare_dataset(
+                    image_paths,
+                    batch_size=1,
+                    shuffle_size=4, ):
+
+                dataset = tf.data.Dataset.from_tensor_slices((image_paths))
+                dataset = dataset.shuffle(shuffle_size)
+                dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
+                dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
+                dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
+                # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
+                return dataset.prefetch(AUTO)
+
+            dataset = prepare_dataset(training_image_paths,
+                                      shuffle_size=params.shuffle_buffer_size,
+                                      batch_size=params.global_batch_size)
+
+            input_reader_factory.input_reader_generator(
+
+            )
+
+            return dataset.repeat()
+
+
+    def build_inputs(self,
+                     params: DataConfig,
+                     input_context: Optional[tf.distribute.InputContext] = None):
+        gpus = tf.config.list_physical_devices('GPU')
+        tpus = tf.config.list_physical_devices('TPU')
+
+        if gpus:
+            return self.inputs_for_gpu(params,input_context)
+        elif tpus:
+            return self.inputs_for_tpu(params, input_context)
         else:
             return self.test_inputs()
 
