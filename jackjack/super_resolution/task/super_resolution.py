@@ -159,10 +159,6 @@ class SuperResolutionTask(base_task.Task):
                                       shuffle_size=params.shuffle_buffer_size,
                                       batch_size=params.global_batch_size)
 
-            input_reader_factory.input_reader_generator(
-
-            )
-
             return dataset.repeat()
 
 
@@ -239,9 +235,6 @@ class SuperResolutionTask(base_task.Task):
                                       shuffle_size=params.shuffle_buffer_size,
                                       batch_size=params.global_batch_size)
 
-            input_reader_factory.input_reader_generator(
-
-            )
 
             return dataset.repeat()
 
