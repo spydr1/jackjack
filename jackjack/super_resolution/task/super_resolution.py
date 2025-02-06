@@ -192,7 +192,7 @@ class SuperResolutionTask(base_task.Task):
                 """
                 raw = tf.io.read_file(image_path)
                 image = tf.io.decode_png(raw, 3)
-                # image = tf.image.random_crop(value=image, size=(h, w, 3))
+                image = tf.image.random_crop(value=image, size=(h, w, 3))
 
                 result = {"input_raw_image": image}
                 return result  # , image.shape
@@ -204,14 +204,14 @@ class SuperResolutionTask(base_task.Task):
                     tf_keras.layers.Rescaling(scale=1.0 / 255.),
                 ]
             )
-            crop_layer = tf_keras.layers.RandomCrop(h, w)
+            # crop_layer = tf_keras.layers.RandomCrop(h, w)
+            #
+            # def crop_image(parsed_tensors: dict):
+            #     cropped_image = crop_layer(parsed_tensors["input_raw_image"])
 
-            def crop_image(parsed_tensors: dict):
-                cropped_image = crop_layer(parsed_tensors["input_raw_image"])
-
-                parsed_tensors.update(
-                    {"input_raw_image": cropped_image})
-                return parsed_tensors
+                # parsed_tensors.update(
+                #     {"input_raw_image": cropped_image})
+                # return parsed_tensors
 
             def keras_augment(parsed_tensors: dict):
                 parsed_tensors.update({"input_raw_image": augmenter(parsed_tensors["input_raw_image"])})
@@ -226,7 +226,7 @@ class SuperResolutionTask(base_task.Task):
                 dataset = tf.data.Dataset.from_tensor_slices((image_paths))
                 dataset = dataset.shuffle(shuffle_size)
                 dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
-                dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
+                # dataset = dataset.map(crop_image, num_parallel_calls=AUTO)  # .batch(batch_size)
                 dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
                 # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
                 return dataset.prefetch(AUTO)
@@ -234,7 +234,6 @@ class SuperResolutionTask(base_task.Task):
             dataset = prepare_dataset(training_image_paths,
                                       shuffle_size=params.shuffle_buffer_size,
                                       batch_size=params.global_batch_size)
-
 
             return dataset.repeat()
 
