@@ -188,7 +188,7 @@ def super_resolution_drct_df2k_ost() -> cfg.ExperimentConfig:
                                 upscale=upscale),
                 ),
             ),
-            losses=Losses(l2_weight_decay=0.00004),
+            # losses=Losses(l2_weight_decay=0.00004),
             train_data=DataConfig(
                 input_path="thaihoa1476050/df2k-ost",
                 cropped_image_shape=[512, 512, 3],

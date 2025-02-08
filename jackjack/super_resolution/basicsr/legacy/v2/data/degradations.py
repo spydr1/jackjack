@@ -846,6 +846,8 @@ class DegradationV3(keras.layers.Layer):
         # self.seed = keras.random.SeedGenerator(seed=seed)
         self.seed = 12345
         self.batch_size = batch_size
+        self.low_image_shape = [batch_size, patch_size//scale, patch_size//scale, 3]
+        self.high_image_shape = [batch_size, patch_size, patch_size, 3]
 
     def call(self,
              high_resolution_image,
@@ -855,12 +857,16 @@ class DegradationV3(keras.layers.Layer):
              training=True,
              ):
 
+        input_shape = tf.shape(high_resolution_image)
+        b, h, w, c = input_shape[0], tf.cast(input_shape[1], dtype=tf.float32), tf.cast(input_shape[2],
+                                                                                        dtype=tf.float32), input_shape[
+                         3]
+
         if training and self.high_order_degradation:
             # training data synthesis
             # USM sharpen the GT images
             if self.gt_usm is True:
                 high_resolution_image = self.usm_sharpener(high_resolution_image)
-            b, h, w, c = high_resolution_image.shape
             # ----------------------- The first degradation process ----------------------- #
             # blur
             out = filter2D(high_resolution_image, kernel=kernel1)
@@ -988,6 +994,8 @@ class DegradationV3(keras.layers.Layer):
             # assert height_lr * self.scale == h and width_lr * self.scale == w, \
             #     "low resolution image size * scale must be same to high resolution image." \
             #     f"low resolution image size : [{height_lr, width_lr}], high resolution image size : [{h, w}]"
+            low_resolution_image.set_shape(self.low_image_shape)
+            high_resolution_image.set_shape(self.high_image_shape)
 
             return {
                 "input_low_resolution_image": low_resolution_image,
