@@ -28,6 +28,7 @@ class Degradation(hyperparams.Config):
 class DataConfig(cfg.DataConfig):
     """Input config for training."""
     input_path: Union[Sequence[str], str, hyperparams.Config] = ''
+    # todo:
     # 1. 전처리 되기전 이미지, model input size 보다 대개 raw image가 크고 어차피 crop 될 것 이므로 전체 이미지 중 일부만 사용
     # 2. 최종 target_image_shape 보다는 좀더 넉넉한 크기
 
@@ -66,14 +67,33 @@ class GanModel(hyperparams.Config):
 
 @dataclasses.dataclass
 class Losses(hyperparams.Config):
-    loss_weight: float = 1.0
-    one_hot: bool = True
-    label_smoothing: float = 0.0
-    l2_weight_decay: float = 0.0
-    soft_labels: bool = False
-    # Converts multi-class classification to multi-label classification. Weights
-    # each object class equally in the loss function, ignoring their size.
-    use_binary_cross_entropy: bool = False
+    pixel_loss_weight: float = 0.01
+    # l2_weight_decay: float = 0.0
+
+    ### perceptual_loss
+    perceptual_loss: bool = False
+    perceptual_loss_weight : float = 1.0
+    ### perceptual_loss
+
+
+    # perceptual_loss_layer_weights
+    # vgg_type: vgg19
+    # use_input_norm: true
+    # range_norm: false
+    # perceptual_weight: 1.0
+    # style_weight: 0
+    # criterion: l1
+    # gan_opt:
+    # type: GANLoss
+    # gan_type: vanilla
+    # real_label_val: 1.0
+    # fake_label_val: 0.0
+    # loss_weight: !!float
+    # 5e-3
+    #
+    #
+    # net_d_iters: 1
+    # net_d_init_iters: 0
 
 
 @dataclasses.dataclass
@@ -151,7 +171,6 @@ class SuperResolutionTask(cfg.TaskConfig):
     validation_data: DataConfig = dataclasses.field(
         default_factory=lambda: DataConfig(is_training=False)
     )
-    perceptual_loss: bool = False
     losses: Losses = dataclasses.field(default_factory=Losses)
     evaluation: Evaluation = dataclasses.field(default_factory=Evaluation)
     train_input_partition_dims: Optional[List[int]] = dataclasses.field(
@@ -210,7 +229,6 @@ def super_resolution_drct_df2k_ost() -> cfg.ExperimentConfig:
 
                               )]
             ),
-            perceptual_loss=False,
         ),
 
         trainer=cfg.TrainerConfig(
@@ -293,7 +311,6 @@ def super_resolution_drct_df2k_ost_test() -> cfg.ExperimentConfig:
 
                               )]
             ),
-            perceptual_loss=False,
         ),
 
         trainer=cfg.TrainerConfig(
@@ -301,6 +318,77 @@ def super_resolution_drct_df2k_ost_test() -> cfg.ExperimentConfig:
             # steps_per_loop=steps_per_epoch,
             steps_per_loop=10,
             summary_interval=steps_per_epoch,
+            checkpoint_interval=steps_per_epoch,
+            optimizer_config=optimization.OptimizationConfig({
+                'optimizer': {
+                    'type': 'adamw',
+                    'adamw': {
+                        'weight_decay_rate': 1e-2
+                    }
+                },
+                'learning_rate': {
+                    'type': 'polynomial',
+                    'polynomial': {
+                        'decay_steps': steps_per_epoch * epoch,
+                        'initial_learning_rate': 1e-4,
+                        'end_learning_rate': 1e-6,
+                    }
+                },
+                'warmup': {
+                    'type': 'linear',
+                    'linear': {
+                        'warmup_steps': 2000,
+                        'warmup_learning_rate': 1e-7
+                    }
+                }
+            })),
+    )
+    return config
+
+@exp_factory.register_config_factory('super_resolution_perceptual_loss_test')
+def perceptual_test() -> cfg.ExperimentConfig:
+    steps_per_epoch = 1000
+
+    epoch = 50
+    train_batch_size = 1
+    # eval_batch_size = 8
+    # SuperResolutionTask
+    input_shape = [64, 64, 3]
+    upscale = 4
+
+    config = cfg.ExperimentConfig(
+        runtime=cfg.RuntimeConfig(
+            enable_xla=False,
+            # run_eagerly=True,
+            mixed_precision_dtype='float16',
+            num_gpus=1),
+        task=SuperResolutionTask(
+            model=GanModel(
+                input_shape=input_shape,
+                backbone=backbones.Backbone(
+                    type='drct',
+                    drct=DRCT_L(img_size=input_shape[0],
+                              upscale=upscale),
+                ),
+            ),
+            init_checkpoint='/home/data/tensorflow/drct/kaggle/drct_030_0.03757117688655853.weights.h5',
+            losses=Losses(perceptual_loss=True),
+            train_data=DataConfig(
+                input_path="thaihoa1476050/df2k-ost",
+                cropped_image_shape=[512, 512, 3],
+                target_image_shape=[input_shape[0]*upscale, input_shape[1]*upscale, 3],
+                upscale=upscale,
+                shuffle_buffer_size=1000,
+                is_training=True,
+                global_batch_size=train_batch_size,
+            ),
+        ),
+
+        trainer=cfg.TrainerConfig(
+            train_steps=steps_per_epoch * epoch,
+            # steps_per_loop=steps_per_epoch,
+            steps_per_loop=100,
+            summary_interval=100,
             checkpoint_interval=steps_per_epoch,
             optimizer_config=optimization.OptimizationConfig({
                 'optimizer': {

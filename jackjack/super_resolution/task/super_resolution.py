@@ -3,8 +3,11 @@ import logging
 
 import kagglehub
 import tensorflow as tf
-import tf_keras
-from typing import Any, List, Optional, Tuple, Union
+import tensorflow.keras as keras
+# import keras -- keras3
+# import tf_keras -- keras2
+
+from typing import Any, List, Optional, Tuple, Union, Dict
 from official.core import task_factory
 from official.core import base_task
 from official.core.base_task import OptimizationConfig, RuntimeConfig, DifferentialPrivacyConfig
@@ -18,37 +21,38 @@ from jackjack.super_resolution.drct.legacy.v2.drct import DRCT
 
 @task_factory.register_task_cls(SuperResolutionTask)
 class SuperResolutionTask(base_task.Task):
-    def initialize(self, model: tf_keras.Model):
+    def initialize(self, model: keras.Model):
         """Loading pretrained checkpoint."""
         if not self.task_config.init_checkpoint:
             return
 
         ckpt_dir_or_file = self.task_config.init_checkpoint
-        if tf.io.gfile.isdir(ckpt_dir_or_file):
-            ckpt_dir_or_file = tf.train.latest_checkpoint(ckpt_dir_or_file)
 
-        # Restoring checkpoint.
-        if self.task_config.init_checkpoint_modules == 'all':
-            ckpt = tf.train.Checkpoint(**model.checkpoint_items)
-            status = ckpt.read(ckpt_dir_or_file)
-            status.expect_partial().assert_existing_objects_matched()
-        # else:
-        #     ckpt_items = {}
-        #     if 'backbone' in self.task_config.init_checkpoint_modules:
-        #         ckpt_items.update(backbone=model.backbone)
-        #     if 'decoder' in self.task_config.init_checkpoint_modules:
-        #         ckpt_items.update(decoder=model.decoder)
-        #
-        #     ckpt = tf.train.Checkpoint(**ckpt_items)
-        #     status = ckpt.read(ckpt_dir_or_file)
-        #     status.expect_partial().assert_existing_objects_matched()
+        if 'h5' in ckpt_dir_or_file:
+            if tf.io.gfile.isdir(ckpt_dir_or_file):
+                raise Exception("Please set specific file, not directory.")
+            else :
+                model.load_weights(ckpt_dir_or_file)
+
+        else :
+            if tf.io.gfile.isdir(ckpt_dir_or_file):
+                ckpt_dir_or_file = tf.train.latest_checkpoint(ckpt_dir_or_file)
+
+            if self.task_config.init_checkpoint_modules == 'all':
+                ckpt = tf.train.Checkpoint(model=model)
+                status = ckpt.read(ckpt_dir_or_file)
+                status.expect_partial().assert_existing_objects_matched()
+            # elif self.task_config.init_checkpoint_modules == 'backbone':
+            #     ckpt = tf.train.Checkpoint(backbone=model.backbone)
+            #     status = ckpt.read(ckpt_dir_or_file)
+            #     status.expect_partial().assert_existing_objects_matched()
 
         logging.info('Finished loading pretrained checkpoint from %s',
                      ckpt_dir_or_file)
 
-    def build_model(self) -> tf_keras.Model:
+    def build_model(self) -> keras.Model:
 
-        input_layer = tf_keras.layers.Input(
+        input_layer = keras.layers.Input(
             shape=self.task_config.model.input_shape,
             batch_size=self.task_config.train_data.global_batch_size,
             name="input_image")
@@ -56,19 +60,18 @@ class SuperResolutionTask(base_task.Task):
         cfg = self.task_config.model.backbone.drct.as_dict()
         # if self.task_config.model.backbone.type == 'drct':
 
+        # todo : build backbone
         drct_model = DRCT(**cfg)
-        model = tf_keras.Model(inputs=input_layer, outputs=drct_model(input_layer))
+        model = keras.Model(inputs=input_layer, outputs=drct_model(input_layer))
 
-        if self.task_config.perceptual_loss:
+        if self.task_config.losses.perceptual_loss:
             self._build_perceptual_model()
 
         return model
 
-
-    def inputs_for_gpu(self,
-                       params: DataConfig,
-                       input_context: Optional[tf.distribute.InputContext] = None):
-
+    def build_inputs(self,
+                     params: DataConfig,
+                     input_context: Optional[tf.distribute.InputContext] = None):
         AUTO = tf.data.AUTOTUNE
         if params.is_kaggle_dataset and params.is_training and params.input_path != '':
             path = kagglehub.dataset_download(params.input_path)
@@ -77,7 +80,7 @@ class SuperResolutionTask(base_task.Task):
             h, w, _ = params.cropped_image_shape
 
             assert h == w, "Input must be square sized image."
-            rotation_range = 0.25  # todo
+            rotation_range = 0.25  # todo : add to config
 
             def read_image(image_path):
                 """
@@ -94,20 +97,26 @@ class SuperResolutionTask(base_task.Task):
                 result = {"input_raw_image": image}
                 return result  # , image.shape
 
-            augmenter = tf_keras.Sequential(
+            augmenter = keras.Sequential(
                 layers=[
-                    tf_keras.layers.RandomFlip(),
-                    tf_keras.layers.RandomRotation(rotation_range),
-                    tf_keras.layers.Rescaling(scale=1.0 / 255.),
+                    keras.layers.RandomFlip(),
+                    keras.layers.RandomRotation(rotation_range),
+                    keras.layers.Rescaling(scale=1.0 / 255.),
                 ]
             )
-            crop_layer = tf_keras.layers.RandomCrop(h, w)
+            crop_layer = keras.layers.RandomCrop(h, w)
 
-            kernel_layer = self.get_kernel_layer()
-            degradation_layer: DegradationV3 = self.get_degradation_layer(
-                target_image_shape=params.target_image_shape,  # todo
-                params=params,
-            )
+            high_h, high_w = params.target_image_shape[:2]
+            low_h, low_w = high_h//params.upscale, high_w//params.upscale
+            # todo
+            # target_image_shape 와 cropped_image_shape를 동일하게 만들면 high에 대한 resize 필요 없음
+            # target_image_shape 와 cropped_image_shape를 각각 만든 이유는 degradation 부분 때문
+
+            # "degradation 부분 때문" -> degradation 과정에는 resize 과정이 포함되는데
+            # 1. crop을 하지 않으면 너무 많은 영역에 대해 추가적인 계산을 하게되고
+            # 2. 이를 해결하기 위해 너무 작은 영역에 대해 crop하면 resize 과정에서 데이터 손실이 유발됨.
+            resizer_high = keras.layers.Resizing(height=high_h,width=high_w)
+            resizer_low = keras.layers.Resizing(height=low_h, width=low_w)
 
             def crop_image(parsed_tensors: dict):
                 cropped_image = crop_layer(parsed_tensors["input_raw_image"])
@@ -120,23 +129,10 @@ class SuperResolutionTask(base_task.Task):
                 parsed_tensors.update({"input_raw_image": augmenter(parsed_tensors["input_raw_image"])})
                 return parsed_tensors
 
-            def keras_degradation(parsed_tensors: dict):
-
-                # # todo : with cpu, depthwise_conv2d 엄청 느려짐 .. 버그일까 ?
-                #
-                with tf.device("gpu"):
-                    degradation_result = degradation_layer(parsed_tensors["input_raw_image"],
-                                                           kernel1=parsed_tensors["kernel1"],
-                                                           kernel2=parsed_tensors["kernel2"],
-                                                           sinc_kernel=parsed_tensors["sinc_kernel"],
-                                                           )
-                parsed_tensors.update(
-                    degradation_result
-                )
-                return parsed_tensors
-
-            def get_kernel(parsed_tensors):
-                parsed_tensors.update(**kernel_layer.get_kernel())
+            def resize_image(parsed_tensors: dict):
+                image = parsed_tensors["input_raw_image"]
+                parsed_tensors["input_low_resolution_image"] =  resizer_low(image)
+                parsed_tensors["input_high_resolution_image"] =  resizer_high(image)
                 return parsed_tensors
 
             def prepare_dataset(
@@ -145,14 +141,12 @@ class SuperResolutionTask(base_task.Task):
                     shuffle_size=4, ):
 
                 dataset = tf.data.Dataset.from_tensor_slices((image_paths))
+                dataset = dataset.repeat()
                 dataset = dataset.shuffle(shuffle_size)
                 dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
                 dataset = dataset.map(crop_image, num_parallel_calls=AUTO).batch(batch_size)  # .batch(batch_size)
                 dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
-                dataset = dataset.map(get_kernel, num_parallel_calls=AUTO)  # .batch(batch_size)
-
-                dataset = dataset.map(keras_degradation, num_parallel_calls=AUTO)  # .batch(batch_size)
-                # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
+                dataset = dataset.map(resize_image, num_parallel_calls=AUTO)  # .batch(batch_size)
                 return dataset.prefetch(AUTO)
 
             dataset = prepare_dataset(training_image_paths,
@@ -160,165 +154,15 @@ class SuperResolutionTask(base_task.Task):
                                       batch_size=params.global_batch_size)
 
             return dataset.repeat()
-
-
-
-    def inputs_for_tpu(self,
-                       params: DataConfig,
-                       input_context: Optional[tf.distribute.InputContext] = None):
-
-        tf.print("******************************************")
-        tf.print("************* inputs for tpu**************")
-        tf.print("******************************************")
-        AUTO = tf.data.AUTOTUNE
-
-
-        if params.is_kaggle_dataset and params.is_training and params.input_path != '':
-            path = kagglehub.dataset_download(params.input_path)
-            training_image_paths = glob.glob(f"{path}/train/**/*.png", recursive=True)
-
-            # h, w, _ = params.cropped_image_shape
-            h, w, _ = params.target_image_shape
-            assert h == w, "Input must be square sized image."
-            rotation_range = 0.25  # todo
-
-            def read_image(image_path):
-                """
-                read image and crop.
-                Small image will be padded. Larger image will be cropped.
-
-                :param image_path:
-                :return:
-                """
-                raw = tf.io.read_file(image_path)
-                image = tf.io.decode_png(raw, 3)
-                image = tf.image.random_crop(value=image, size=(h, w, 3))
-
-                result = {"input_raw_image": image}
-                return result  # , image.shape
-
-            augmenter = tf_keras.Sequential(
-                layers=[
-                    tf_keras.layers.RandomFlip(),
-                    tf_keras.layers.RandomRotation(rotation_range),
-                    tf_keras.layers.Rescaling(scale=1.0 / 255.),
-                ]
-            )
-            # crop_layer = tf_keras.layers.RandomCrop(h, w)
-            #
-            # def crop_image(parsed_tensors: dict):
-            #     cropped_image = crop_layer(parsed_tensors["input_raw_image"])
-
-                # parsed_tensors.update(
-                #     {"input_raw_image": cropped_image})
-                # return parsed_tensors
-
-            def keras_augment(parsed_tensors: dict):
-                parsed_tensors.update({"input_raw_image": augmenter(parsed_tensors["input_raw_image"])})
-                return parsed_tensors
-
-
-            def prepare_dataset(
-                    image_paths,
-                    batch_size=1,
-                    shuffle_size=4, ):
-
-                dataset = tf.data.Dataset.from_tensor_slices((image_paths))
-                dataset = dataset.shuffle(shuffle_size)
-                dataset = dataset.map(read_image, num_parallel_calls=AUTO) # .batch(batch_size)
-                # dataset = dataset.map(crop_image, num_parallel_calls=AUTO)  # .batch(batch_size)
-                dataset = dataset.map(keras_augment, num_parallel_calls=AUTO)  # .batch(batch_size)
-                # dataset = dataset.map(prepare_dict, num_parallel_calls=AUTO)
-                return dataset.prefetch(AUTO)
-
-            dataset = prepare_dataset(training_image_paths,
-                                      shuffle_size=params.shuffle_buffer_size,
-                                      batch_size=params.global_batch_size)
-
-            return dataset.repeat()
-
-
-    def build_inputs(self,
-                     params: DataConfig,
-                     input_context: Optional[tf.distribute.InputContext] = None):
-        gpus = tf.config.list_physical_devices('GPU')
-        tpus = tf.config.list_physical_devices('TPU')
-
-        if gpus:
-            return self.inputs_for_gpu(params,input_context)
-        elif tpus:
-            return self.inputs_for_tpu(params, input_context)
         else:
             return self.test_inputs()
 
-    def get_kernel_layer(self):
-        kernel_layer = RealESRGANDataset(
-            blur_kernel_size=21,
-            kernel_list=['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso',
-                         'plateau_aniso'],
-            kernel_prob=[0.45, 0.25, 0.12, 0.03, 0.12, 0.03],
-            sinc_prob=0.1,
-            blur_sigma=[0.2, 3],
-            betag_range=[0.5, 4],
-            betap_range=[1, 2],
-            blur_kernel_size2=21,
-            kernel_list2=['iso', 'aniso', 'generalized_iso', 'generalized_aniso', 'plateau_iso',
-                          'plateau_aniso'],
-            kernel_prob2=[0.45, 0.25, 0.12, 0.03, 0.12, 0.03],
-            sinc_prob2=0.1,
-            blur_sigma2=[0.2, 1.5],
-            betag_range2=[0.5, 4],
-            betap_range2=[1, 2],
-            final_sinc_prob=0.8,
-        )
-        return kernel_layer
-
-    def get_degradation_layer(self, target_image_shape, params: DataConfig,
-                              gt_usm=True, seed=12345, ):
-        # degradation_layer = keras.layers.Identity()
-        # if params is None :
-        #     pass
-        # elif isinstance(params,Degradation):
-        #     # todo
-        #     pass
-        degradation_cfg = params.degradations
-        if isinstance(degradation_cfg, list):
-            assert len(degradation_cfg) == 2, "number of degradation step is limit to 2."
-            # first, second
-            _f, _s = degradation_cfg[0], degradation_cfg[1]
-
-            degradation_layer = DegradationV3(
-                resize_prob=_f.resize_prob,
-                resize_prob2=_s.resize_prob,
-                resize_range=_f.resize_range,
-                resize_range2=_s.resize_range,
-                gray_noise_prob=_f.gray_noise_prob,
-                gray_noise_prob2=_s.gray_noise_prob,
-                gaussian_noise_prob=_f.gaussian_noise_prob,
-                gaussian_noise_prob2=_s.gaussian_noise_prob,
-                noise_range=_f.noise_range,
-                noise_range2=_s.noise_range,
-                poisson_scale_range=_f.poisson_scale_range,
-                poisson_scale_range2=_s.poisson_scale_range,
-                jpeg_range=_f.jpeg_range,
-                jpeg_range2=_s.jpeg_range,
-                second_blur_prob=_s.blur_prob,
-                patch_size=target_image_shape[0],
-                seed=seed,
-                gt_usm=gt_usm,
-                batch_size=params.global_batch_size,
-                scale=params.upscale
-            )
-        else:
-            degradation_layer = tf_keras.layers.Identity()
-
-        return degradation_layer
 
     def test_inputs(self) -> tf.data.Dataset:
-        (x_train, y_train), (x_test, y_test) = tf_keras.datasets.cifar10.load_data()
+        (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
         dataset = tf.data.Dataset.from_tensor_slices(
 
-            (x_train[:1000], tf_keras.preprocessing.image.smart_resize(x_train[:1000], size=(128, 128))))
+            (x_train[:1000], keras.preprocessing.image.smart_resize(x_train[:1000], size=(128, 128))))
 
         def prepare_dict(x0, x1):
             return {"input_low_resolution_image": x0, "input_high_resolution_image": x1}
@@ -328,7 +172,8 @@ class SuperResolutionTask(base_task.Task):
 
     def _build_perceptual_model(self):
 
-        _vgg_net = tf_keras.applications.VGG19(
+        # input image for vgg, zero center, bgr
+        _vgg_net = keras.applications.VGG19(
             include_top=False,
             input_shape=[
                 self.task_config.model.input_shape[0] * 4,
@@ -336,6 +181,8 @@ class SuperResolutionTask(base_task.Task):
                 self.task_config.model.input_shape[2]
             ]
         )
+
+        # todo : add to config.
         self.perceptual_target_layer = {
             'block1_conv2': 0.1,
             'block2_conv2': 0.1,
@@ -343,49 +190,70 @@ class SuperResolutionTask(base_task.Task):
             'block4_conv4': 1,
             'block5_conv4': 1
         }
-        self.vgg = tf_keras.Model(
+
+        self.criterion = '1'  # todo : add to config --- `'fro'`, `'euclidean'`, `1`, `2`, `np.inf`
+
+        self.vgg = keras.Model(
             _vgg_net.input,
             [_vgg_net.get_layer(k).output for k, v in self.perceptual_target_layer.items()]
         )
+        self.vgg.trainable = False
 
     def _build_perceptual_loss(self, high_resolution_image, model_outputs):
         """
 
-        :param high_resolution_image: high resolution image (ground truth) - [b, w, h, 3](rgb)
-        :param model_outputs: prediction of Gan model.
-
-        :return: perceptual_loss
+        :param high_resolution_image: high resolution image (ground truth) - [b, w, h, 3] (rgb)
+        :param model_outputs: prediction of Gan model. - [b, w, h, 3] (rgb)
         """
-        prep = tf_keras.applications.vgg19.preprocess_input
+        # 현재 input image 범위 0~1
+        model_outputs = tf.cast(model_outputs, dtype=tf.float64)
+        rescaled_output = (model_outputs - 0.5 ) *2
 
-        x_features = self.vgg(prep(model_outputs))
-        gt_features = self.vgg(prep(high_resolution_image))
+        high_resolution_image = tf.cast(high_resolution_image, dtype=tf.float64)
+        rescaled_gt = (high_resolution_image - 0.5) * 2
+
+        #vgg input image 범위 -1~1
+        x_features = self.vgg(rescaled_output)
+        x_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float64), x_features)
+        gt_features = self.vgg(rescaled_gt)
+        gt_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float64), gt_features)
 
         perceptual_loss = 0.0
         layer_weight = list(self.perceptual_target_layer.values())
+
+
         for i in range(len(self.perceptual_target_layer)):
-            tf_keras.losses.MeanAbsoluteError()
-            perceptual_loss += tf_keras.losses.MeanAbsoluteError()(gt_features[i], x_features[i],
-                                                                   sample_weight=layer_weight[i])
-            # keras.ops.mean(keras.losses.mean_absolute_error(gt_features[i], x_features[i])*layer_weight[i])
+            if self.criterion == 'fro':
+                perceptual_loss += tf.norm(x_features[i] - gt_features[i], ord=self.criterion) * layer_weight[i]
+            elif self.criterion == '1':
+                loss = keras.losses.mean_absolute_error(gt_features[i], x_features[i])
+                perceptual_loss += tf.reduce_mean(loss) * layer_weight[i]
+            elif self.criterion == '2':
+                loss = keras.losses.mean_squared_error(gt_features[i], x_features[i])
+                perceptual_loss += tf.reduce_mean(loss) * layer_weight[i]
+            else :
+                raise Exception(f"Criterion for perceptual loss is {self.criterion}, it is not supported.")
+
 
         return perceptual_loss
 
-    def build_losses(self, high_resolution_image, model_outputs, aux_losses=None) -> tf.Tensor:
-
+    def build_losses(self, high_resolution_image, model_outputs, aux_losses=None) -> Dict[str, tf.Tensor]:
+        loss_params = self.task_config.losses
         # l1 loss
-        pixel_loss = tf_keras.losses.mean_absolute_error(high_resolution_image, model_outputs)  # todo: weight
+        pixel_loss = keras.losses.mean_absolute_error(high_resolution_image, model_outputs)  # todo: weight
         pixel_loss = tf.reduce_mean(pixel_loss)
         # perceptual loss
-        total_loss = 0.0
-        total_loss += pixel_loss
-        if self.task_config.perceptual_loss:
-            perceptual_loss = self._build_perceptual_loss(high_resolution_image, model_outputs)
-            total_loss += perceptual_loss
+        total_loss = tf.constant(0.0, dtype=tf.float32)
+        total_loss += pixel_loss * loss_params.pixel_loss_weight
 
-        loss_result = {"total_loss": total_loss,
-                       "pixel_loss": pixel_loss,
-                       }
+        loss_result = {"pixel_loss": pixel_loss}
+
+        if self.task_config.losses.perceptual_loss:
+            perceptual_loss = self._build_perceptual_loss(high_resolution_image, model_outputs)
+            loss_result.update({"perceptual_loss": perceptual_loss})
+            total_loss += tf.cast(perceptual_loss * loss_params.perceptual_loss_weight, total_loss.dtype)
+
+        loss_result.update({"total_loss": total_loss})
         return loss_result
 
     def build_metrics(self, training: bool = True):
@@ -394,16 +262,16 @@ class SuperResolutionTask(base_task.Task):
                 'total_loss',
                 'pixel_loss'
             ]
-            if self.task_config.perceptual_loss:
+            if self.task_config.losses.perceptual_loss:
                 metric_names.append("perceptual_loss")
             return [
-                tf_keras.metrics.Mean(name, dtype=tf.float32) for name in metric_names
+                keras.metrics.Mean(name, dtype=tf.float32) for name in metric_names
             ]
 
     def train_step(self,
                    inputs,
-                   model: tf_keras.Model,
-                   optimizer: tf_keras.optimizers.Optimizer,
+                   model: keras.Model,
+                   optimizer: keras.optimizers.Optimizer,
                    metrics=None):
         """
 
@@ -431,8 +299,8 @@ class SuperResolutionTask(base_task.Task):
 
             # Computes per-replica loss.
             loss = self.build_losses(
-                model_outputs=outputs,
                 high_resolution_image=high_resolution_image,
+                model_outputs=outputs,
                 aux_losses=model.losses)
             # Scales loss as the default gradients allreduce performs sum inside the
             # optimizer.
@@ -441,7 +309,7 @@ class SuperResolutionTask(base_task.Task):
             # For mixed_precision policy, when LossScaleOptimizer is used, loss is
             # scaled for numerical stability.
             if isinstance(
-                    optimizer, tf_keras.mixed_precision.LossScaleOptimizer):
+                    optimizer, keras.mixed_precision.LossScaleOptimizer):
                 scaled_loss = optimizer.get_scaled_loss(scaled_loss)
 
         tvars = model.trainable_variables
@@ -449,7 +317,7 @@ class SuperResolutionTask(base_task.Task):
         # Scales back gradient before apply_gradients when LossScaleOptimizer is
         # used.
         if isinstance(
-                optimizer, tf_keras.mixed_precision.LossScaleOptimizer):
+                optimizer, keras.mixed_precision.LossScaleOptimizer):
             grads = optimizer.get_unscaled_gradients(grads)
         optimizer.apply_gradients(list(zip(grads, tvars)))
 
@@ -460,39 +328,3 @@ class SuperResolutionTask(base_task.Task):
 
         return logs
 
-    # def build_inputs(self,
-    #                params,
-    #                input_context: Optional[tf.distribute.InputContext] = None):
-
-
-def pad_to_target_size(
-        image,
-        target_height,
-        target_width,
-        mode='REFLECT',
-        constant_values=0,
-        name=None
-):
-    # https://www.tensorflow.org/api_docs/python/tf/pad
-    """
-
-    :param image: [h,w,c]
-    :param target_height:
-    :param target_width:
-    :param mode:
-    :param constant_values:
-    :param name:
-    :return:
-        [target_height, target_width, c]. case 1. If original image is less than target size.
-        [h, w, c].                        case 2. If original image is larger than target size.
-    """
-
-    shape = tf.shape(image)
-    h, w = shape[0], shape[1]
-
-    pad_h = tf.maximum(0, target_height - h)
-    pad_w = tf.maximum(0, target_width - w)
-    # padding = keras.ops.repeat(tf.constant([[0,pad_h], [0,pad_w]])[:,:,None], repeats=3, axis=-1)
-    padded_image = tf.pad(image, [[0, pad_h], [0, pad_w], [0, 0]], mode=mode)
-    tf_keras.preprocessing.image.smart_resize
-    return padded_image

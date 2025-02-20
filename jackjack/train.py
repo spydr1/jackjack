@@ -13,6 +13,8 @@
 # limitations under the License.
 
 """TensorFlow Model Garden Vision training driver."""
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 from absl import app
 from absl import flags

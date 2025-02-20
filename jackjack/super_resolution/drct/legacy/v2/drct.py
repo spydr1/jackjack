@@ -1,9 +1,9 @@
 import math
 import tensorflow as tf
-import tf_keras as keras
+import tensorflow.keras as keras
+# import tf_keras as keras
 import numpy as np
-import tf_keras.mixed_precision
-
+# import keras.mixed_precision
 
 def drop_path(x, drop_prob: float = 0.):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
@@ -233,7 +233,7 @@ class WindowAttention(keras.layers.Layer):
         self.softmax = keras.layers.Softmax(axis=-1)
 
     def build(self, input_shape):
-        self.relative_position_bias_table = self.add_variable(
+        self.relative_position_bias_table = self.add_weight(
             shape=((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), self.num_heads),
             initializer=keras.initializers.TruncatedNormal(stddev=0.02),
             name="relative_position_bias_table"
@@ -737,7 +737,7 @@ class DRCT(keras.models.Model):
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
-        mixed_policy = tf_keras.mixed_precision.global_policy()
+        mixed_policy = keras.mixed_precision.global_policy()
         self.img_range = img_range
         if in_chans == 3:
             rgb_mean = (0.4488, 0.4371, 0.4040)
