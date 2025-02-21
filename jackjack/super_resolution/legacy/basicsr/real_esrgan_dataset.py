@@ -1,3 +1,8 @@
+"""
+Apache License Version 2.0
+https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/data/realesrgan_dataset.py
+"""
+
 import math
 import random
 import numpy as np

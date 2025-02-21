@@ -1,3 +1,8 @@
+
+"""
+MIT license
+https://github.com/ming053l/DRCT/blob/main/drct/archs/DRCT_arch.py
+"""
 import math
 import tensorflow as tf
 import tensorflow.keras as keras

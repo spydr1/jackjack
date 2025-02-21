@@ -1,3 +1,8 @@
+"""
+Apache License Version 2.0
+https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/data/degradations.py
+"""
+
 import cv2
 import math
 import numpy as np

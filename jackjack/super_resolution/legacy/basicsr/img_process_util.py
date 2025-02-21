@@ -1,3 +1,8 @@
+"""
+Apache License Version 2.0
+https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/utils/img_process_util.py
+"""
+
 import cv2
 import numpy as np
 import tensorflow as tf
