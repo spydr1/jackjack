@@ -1,6 +1,5 @@
 import dataclasses
-import os
-from typing import List, Optional, Tuple, Union, Sequence, Dict
+from typing import List, Optional, Union, Sequence
 
 from official.core import config_definitions as cfg
 from official.core import exp_factory
@@ -9,7 +8,7 @@ from official.modeling import optimization
 from official.vision.configs import common
 
 from jackjack.super_resolution.config import backbones
-from jackjack.super_resolution.drct.legacy.config import DRCT, DRCT_L
+from jackjack.super_resolution.legacy.drct.config import DRCT, DRCT_L
 
 
 @dataclasses.dataclass

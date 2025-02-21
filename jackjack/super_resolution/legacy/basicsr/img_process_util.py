@@ -10,8 +10,6 @@ from sympy import transpose
 
 # 모든 배치에서 random kernel 이 생성되는데 이를 굳이 배치안의 모든 이미지를 다르게 처리할 필요가 없다고 생각해서.
 
-#
-#
 
 def filter2D(img: tf.Tensor, kernel=None):
     """Tensorflow version of cv2.filter2D

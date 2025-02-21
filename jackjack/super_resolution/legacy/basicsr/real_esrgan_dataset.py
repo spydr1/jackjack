@@ -3,7 +3,7 @@ import random
 import numpy as np
 import tensorflow as tf
 
-from jackjack.super_resolution.basicsr.legacy.v2.data.degradations import circular_lowpass_kernel, random_mixed_kernels
+from jackjack.super_resolution.legacy.basicsr.degradations import circular_lowpass_kernel, random_mixed_kernels
 
 
 class RealESRGANDataset:

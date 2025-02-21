@@ -14,10 +14,10 @@
 
 """Backbones configurations."""
 import dataclasses
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from official.modeling import hyperparams
-from jackjack.super_resolution.drct.legacy.config import DRCT
+from jackjack.super_resolution.legacy.drct.config import DRCT
 
 
 @dataclasses.dataclass

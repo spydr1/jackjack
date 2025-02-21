@@ -7,16 +7,12 @@ import tensorflow.keras as keras
 # import keras -- keras3
 # import tf_keras -- keras2
 
-from typing import Any, List, Optional, Tuple, Union, Dict
+from typing import Optional, Dict
 from official.core import task_factory
 from official.core import base_task
-from official.core.base_task import OptimizationConfig, RuntimeConfig, DifferentialPrivacyConfig
-from official.vision.dataloaders import input_reader_factory
 
-from jackjack.super_resolution.basicsr.legacy.v2.data.degradations import DegradationV3
-from jackjack.super_resolution.basicsr.legacy.v2.data.real_esrgan_dataset import RealESRGANDataset
-from jackjack.super_resolution.config.super_resolution import SuperResolutionTask, DataConfig, Degradation
-from jackjack.super_resolution.drct.legacy.v2.drct import DRCT
+from jackjack.super_resolution.config.super_resolution import SuperResolutionTask, DataConfig
+from jackjack.super_resolution.modeling.generator import DRCT
 
 
 @task_factory.register_task_cls(SuperResolutionTask)
@@ -206,17 +202,17 @@ class SuperResolutionTask(base_task.Task):
         :param model_outputs: prediction of Gan model. - [b, w, h, 3] (rgb)
         """
         # 현재 input image 범위 0~1
-        model_outputs = tf.cast(model_outputs, dtype=tf.float64)
+        # model_outputs = tf.cast(model_outputs, dtype=tf.float64)
         rescaled_output = (model_outputs - 0.5 ) *2
 
-        high_resolution_image = tf.cast(high_resolution_image, dtype=tf.float64)
+        # high_resolution_image = tf.cast(high_resolution_image, dtype=tf.float64)
         rescaled_gt = (high_resolution_image - 0.5) * 2
 
         #vgg input image 범위 -1~1
         x_features = self.vgg(rescaled_output)
-        x_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float64), x_features)
+        x_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float32), x_features)
         gt_features = self.vgg(rescaled_gt)
-        gt_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float64), gt_features)
+        gt_features = tf.nest.map_structure(lambda x: tf.cast(x, tf.float32), gt_features)
 
         perceptual_loss = 0.0
         layer_weight = list(self.perceptual_target_layer.values())

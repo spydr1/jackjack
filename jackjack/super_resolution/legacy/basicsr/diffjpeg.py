@@ -1,5 +1,5 @@
 """
-Modified from https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/utils/diffjpeg.py (Code2).
+Modified from https://github.com/XPixelGroup/BasicSR/blob/master/basicsr/utils/diffjpeg.py (=Code2).
 Code2 is modified from https://github.com/mlomnitz/DiffJPEG - MIT license - https://github.com/mlomnitz/DiffJPEG?tab=MIT-1-ov-file
 """
 

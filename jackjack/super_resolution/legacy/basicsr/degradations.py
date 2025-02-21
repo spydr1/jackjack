@@ -15,8 +15,8 @@ from tensorflow.image import rgb_to_grayscale
 
 
 # --------------------------- util functions --------------------------- #
-from jackjack.super_resolution.basicsr.legacy.v2.utils.diffjpeg import DiffJPEG
-from jackjack.super_resolution.basicsr.legacy.v2.utils.img_process_util import USMSharp, filter2D
+from jackjack.super_resolution.legacy.basicsr.diffjpeg import DiffJPEG
+from jackjack.super_resolution.legacy.basicsr.img_process_util import USMSharp, filter2D
 
 
 def sigma_matrix2(sig_x, sig_y, theta):
