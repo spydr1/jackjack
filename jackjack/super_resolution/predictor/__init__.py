@@ -1,0 +1,1 @@
+from jackjack.super_resolution.predictor.loader import DRCT, RealESRGAN

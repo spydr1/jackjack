@@ -4,11 +4,15 @@ MIT license
 https://github.com/ming053l/DRCT/blob/main/drct/archs/DRCT_arch.py
 """
 import math
+
+import tf_keras.src.layers
+import tqdm
 import tensorflow as tf
 import tensorflow.keras as keras
 # import tf_keras as keras
-import numpy as np
-# import keras.mixed_precision
+
+
+from jackjack.super_resolution.legacy.real_esrgan.image_utils import *
 
 def drop_path(x, drop_prob: float = 0.):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
@@ -563,7 +567,6 @@ class PatchMerging(keras.layers.Layer):
 
         return x
 
-
 class PatchEmbed(keras.layers.Layer):
     r""" Image to Patch Embedding
 
@@ -593,9 +596,9 @@ class PatchEmbed(keras.layers.Layer):
         else:
             self.norm = None
 
-    # def compute_output_shape(self, x):
-    #     b, h, w, c = keras.ops.shape(x)
-    #     return (b, h*w, c)
+    def compute_output_shape(self, input_shape):
+        b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+        return tf.TensorShape([b, h * w, c])
 
     def call(self, x):
 
@@ -606,13 +609,6 @@ class PatchEmbed(keras.layers.Layer):
         if self.norm is not None:
             x = self.norm(x)  # 归一化
         return x
-
-    def flops(self):
-        Ho, Wo = self.patches_resolution
-        flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
-        if self.norm is not None:
-            flops += Ho * Wo * self.embed_dim
-        return flops
 
 
 class PatchUnEmbed(keras.layers.Layer):
@@ -638,6 +634,10 @@ class PatchUnEmbed(keras.layers.Layer):
 
         self.in_chans = in_chans  # 输入图像的通道数
         self.embed_dim = embed_dim  # 线性 projection 输出的通道数
+
+    def compute_output_shape(self, input_shape):
+        b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+        return tf.TensorShape([b, h * w, c])
 
     def call(self, x, x_size):
         input_shape = tf.shape(x)  # 输入 x 的结构
@@ -706,6 +706,7 @@ class Upsample(keras.Sequential):
 class DRCT(keras.models.Model):
     def __init__(self,
                  img_size=64,
+                 fixed_shape=True,
                  patch_size=1,
                  in_chans=3,
                  embed_dim=96,
@@ -733,12 +734,13 @@ class DRCT(keras.models.Model):
                  gc=32,
                  **kwargs
                  ):
-        super(DRCT, self).__init__()
+        super(DRCT, self).__init__(**kwargs)
 
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.overlap_ratio = overlap_ratio
         self.img_size = img_size
+        self.fixed_shape = fixed_shape
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
@@ -780,6 +782,7 @@ class DRCT(keras.models.Model):
         # merge non-overlapping patches into image
 
         # absolute position embedding
+        # warning : super-resolution task 에서는 아예 쓰지 않는다.
         if self.ape:
             self.absolute_pos_embed = self.add_weight(shape=[1, num_patches, embed_dim],
                                                       initializer=keras.initializers.TruncatedNormal(stddev=0.02))
@@ -823,34 +826,13 @@ class DRCT(keras.models.Model):
             self.upsample = Upsample(upscale, num_feat)
             self.conv_last = keras.layers.Conv2D(num_out_ch, kernel_size=3, padding='same', name='conv_last')
 
-        # super().__init__(input_image, output)
-        # self.apply(self._init_weights)
-
-    # Dense trunc_normal with zero bias
-    # LayerNorm
-    # beta_initializer="zeros",
-    # gamma_initializer="ones",
-
-    # def _init_weights(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         trunc_normal_(m.weight, std=.02)
-    #         if isinstance(m, nn.Linear) and m.bias is not None:
-    #             nn.init.constant_(m.bias, 0)
-    #     elif isinstance(m, nn.LayerNorm):
-    #         nn.init.constant_(m.bias, 0)
-    #         nn.init.constant_(m.weight, 1.0)
-
-    # @torch.jit.ignore
-    # def no_weight_decay(self):
-    #     return {'absolute_pos_embed'}
-    #
-    # @torch.jit.ignore
-    # def no_weight_decay_keywords(self):
-    #     return {'relative_position_bias_table'}
-
     def forward_features(self, x, training=False):
         input_shape = tf.shape(x)
-        x_size = (self.img_size, self.img_size)
+        if self.fixed_shape:
+            x_size = (self.img_size , self.img_size)
+        else :
+            h, w = input_shape[1], input_shape[2]
+            x_size = (h, w)
 
         x = self.patch_embed(x)
         if self.ape:
@@ -880,6 +862,81 @@ class DRCT(keras.models.Model):
         x = x / self.img_range + self.mean
 
         return x
+
+    def predict_dynamic_shape(self,
+                              low_resolution_image):
+        """
+        :param low_resolution_image: numpy array of single Image. not batched.
+            1. shape : [h,w,3]
+            2. range : 0~255
+            3. rgb channel
+        :return:
+        """
+
+        logging.warning("You are using dynamic shape prediction. It is not recommended. \n"
+                        "1. problem of OOM, low speed. \n"
+                        "2. fixed batch size to 1. \n"
+                        "3. impossible to parallel computational")
+
+        # ***todo : 이부분 설명
+        window_size = self.window_size
+        h_old = low_resolution_image.shape[0]
+        w_old = low_resolution_image.shape[1]
+        h_pad = (h_old // window_size + 1) * window_size - h_old
+        w_pad = (w_old // window_size + 1) * window_size - w_old
+
+        new_shape = [h_old + h_pad, w_old + w_pad, 3]
+        padded_image = np.zeros(new_shape)
+        padded_image[:h_old, :w_old] = low_resolution_image
+        # ******************
+
+        x = padded_image/ 255
+        np_sr_image = self(x).numpy()
+        np_sr_image = np.clip(np_sr_image, 0, 1)
+        sr_img = (np_sr_image * 255).astype(np.uint8)
+
+        return sr_img[0]
+
+    def predict(
+            self,
+            low_resolution_image,
+            batch_size=1,
+            patches_size=64,
+            padding = 24,
+            pad_size = 15,
+    ):
+        """
+        :param low_resolution_image: numpy array of Single Image. It is not batched.
+            1. shape : [h,w,3]
+            2. range : 0~255
+            3. rgb channel
+        :param batch_size:
+        :return:
+        """
+
+
+        # low_resolution_image = pad_reflect(low_resolution_image, pad_size)
+        patches, p_shape = split_image_into_overlapping_patches(low_resolution_image, patch_size=patches_size, overlap_size=padding)
+        patches = patches / 255
+        num_of_patch = patches.shape[0]
+        result = []
+        for i in tqdm.trange(0, num_of_patch, batch_size):
+            result += [self.predict_on_batch(patches[i:i + batch_size])]
+
+        result_concat = np.concatenate(result, axis=0)
+        sr_image = result_concat.clip(0, 1)
+
+        padded_size_scaled = tuple(np.multiply(p_shape[0:2], self.upscale)) + (3,)
+        scaled_image_shape = tuple(np.multiply(low_resolution_image.shape[0:2], self.upscale)) + (3,)
+        np_sr_image = stich_together(
+            sr_image, padded_image_shape=padded_size_scaled,
+            target_shape=scaled_image_shape, padding_size=padding * self.upscale
+        )
+        np_sr_image = np.clip(np_sr_image, 0, 1)
+        sr_img = (np_sr_image * 255).astype(np.uint8)
+        # sr_img = unpad_image(sr_img, pad_size * self.upscale)
+
+        return sr_img
 
     # todo 1.dynamic shape 대한 predict
     # todo 2.fixed shape 대한 predict
