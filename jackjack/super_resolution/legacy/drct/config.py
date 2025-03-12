@@ -46,6 +46,6 @@ class DRCT_L(DRCT):
 
 
 WEIGHT_PATH = {
+    "4xrealwebphoto_v4_drct-l": {"config": DRCT_L(), "path": "spydr1/drct/keras/4xrealwebphoto_v4_drct-l"},
     "drct_l": {"config":DRCT_L(), "path":"spydr1/drct/keras/drct_l"},
-    "4xrealwebphoto_v4_drct-l": {"config": DRCT_L(), "path": "spydr1/drct/keras/4xrealwebphoto_v4_drct-l"}
 }

@@ -1,16 +1,11 @@
-
 """
 MIT license
 https://github.com/ming053l/DRCT/blob/main/drct/archs/DRCT_arch.py
 """
 import math
-
-import tf_keras.src.layers
 import tqdm
 import tensorflow as tf
 import tensorflow.keras as keras
-# import tf_keras as keras
-
 
 from jackjack.super_resolution.legacy.real_esrgan.image_utils import *
 
@@ -42,6 +37,9 @@ class DropPath(keras.layers.Layer):
         super(DropPath, self).__init__(**kwargs)
         self.rate = rate
 
+    # def compute_output_shape(self, x_shape):
+    #     return x_shape
+
     def call(self, x, training=None):
         if training and self.rate > 0:  # and self.rate > 0:
             return drop_path(x, self.rate)
@@ -60,17 +58,21 @@ class ChannelAttention(keras.layers.Layer):
 
     def __init__(self, num_feat, squeeze_factor=16, **kwargs):
         super(ChannelAttention, self).__init__(**kwargs)
-
+        self.num_feat = num_feat
         # https://pytorch.org/docs/stable/generated/torch.nn.AdaptiveAvgPool2d.html
         self.attention = keras.Sequential(
             [
                 keras.layers.GlobalAvgPool2D(),
-                keras.layers.Conv2D(num_feat // squeeze_factor, kernel_size=1, padding='valid'),
+                keras.layers.Conv2D(self.num_feat // squeeze_factor, kernel_size=1, padding='valid'),
                 keras.layers.Activation(keras.activations.relu),  # inplace=True
-                keras.layers.Conv2D(num_feat, kernel_size=1, padding='valid'),
+                keras.layers.Conv2D(self.num_feat, kernel_size=1, padding='valid'),
                 keras.layers.Activation(keras.activations.sigmoid),
             ]
         )
+
+    # def compute_output_shape(self, x_shape):
+    #     batch_size = x_shape[0]
+    #     return tf.TensorShape([batch_size, None, None, self.num_feat])
 
     def call(self, x):
         y = self.attention(x)
@@ -103,12 +105,16 @@ class Mlp(keras.layers.Layer):
                  act_layer=keras.activations.gelu, drop=0.,
                  **kwargs):
         super().__init__(**kwargs)
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = keras.layers.Dense(hidden_features, name='fc1')
+        self.out_features = out_features or in_features
+        self.hidden_features = hidden_features or in_features
+        self.fc1 = keras.layers.Dense(self.hidden_features, name='fc1')
         self.act = keras.layers.Activation(act_layer)
-        self.fc2 = keras.layers.Dense(out_features, name='fc2')
+        self.fc2 = keras.layers.Dense(self.out_features, name='fc2')
         self.drop = keras.layers.Dropout(drop)
+
+    # def compute_output_shape(self, x_shape):
+    #     batch_size = x_shape[0]
+    #     return tf.TensorShape([batch_size, None, self.out_features])
 
     def call(self, x):
         x = self.fc1(x)
@@ -119,21 +125,6 @@ class Mlp(keras.layers.Layer):
         return x
 
 
-# def window_partition(x, window_size):
-#     """
-#     Args:
-#         x: (B, H, W, C)
-#         window_size (int): window size
-#     Returns:
-#         windows: (num_windows*B, window_size, window_size, C)
-#     """
-#     B, H, W, C = x.shape
-#     x = np.reshape(x, [B, H // window_size, window_size, W // window_size, window_size, C])
-#     windows = np.transpose(x, axes=(0, 1, 3, 2, 4, 5))
-#     windows = np.reshape(windows, [-1, window_size, window_size, C])
-#     return windows
-
-
 def window_partition(x, window_size):
     """
     Args:
@@ -142,23 +133,8 @@ def window_partition(x, window_size):
     Returns:
         windows: (num_windows*B, window_size, window_size, C)
     """
-    b, h, w, c = np.shape(x)
-    x = np.reshape(x, [b, h // window_size, window_size, w // window_size, window_size, c])
-    windows = np.transpose(x, axes=(0, 1, 3, 2, 4, 5))
-    windows = np.reshape(windows, [-1, window_size, window_size, c])
-    return windows
-
-
-def window_partition_layer(x, window_size):
-    """
-    Args:
-        x: (B, H, W, C)
-        window_size (int): window size
-    Returns:
-        windows: (num_windows*B, window_size, window_size, C)
-    """
-    input_shape = tf.shape(x)
-    b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+    shape = tf.shape(x)
+    b, h, w, c = shape[0], shape[1], shape[2], shape[3]
     x = tf.reshape(x, [b, h // window_size, window_size, w // window_size, window_size, c])
     windows = tf.transpose(x, perm=(0, 1, 3, 2, 4, 5))
     windows = tf.reshape(windows, [-1, window_size, window_size, c])
@@ -207,18 +183,10 @@ class WindowAttention(keras.layers.Layer):
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_dim = dim // num_heads
+        self.qkv_bias = qkv_bias
         self.scale = qk_scale or head_dim ** -0.5
-
-        # define a parameter table of relative position bias
-        # self.relative_position_bias_table = self.add_variable(
-        #     ((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads),
-        #     initializer=keras.initializers.TruncatedNormal(stddev=0.02),
-        #     # name="relative_position_bias_table"
-        # )  # 2*Wh-1 * 2*Ww-1, nH
-
-        # coords_h = torch.arange(self.window_size[0])
-        # coords_w = torch.arange(self.window_size[1])
-        # coords = torch.stack(torch.meshgrid([coords_h, coords_w],indexing="ij"))
+        self.attn_drop = attn_drop
+        self.proj_drop = proj_drop
 
         # get pair-wise relative position index for each token inside the window
         coords_h = np.arange(self.window_size[0])
@@ -233,27 +201,35 @@ class WindowAttention(keras.layers.Layer):
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
         self.relative_position_index = np.sum(relative_coords, axis=-1)  # Wh*Ww, Wh*Ww
 
-        self.qkv = keras.layers.Dense(dim * 3, use_bias=qkv_bias, name='qkv')
-        self.attn_drop = keras.layers.Dropout(attn_drop)
-        self.proj = keras.layers.Dense(dim, name='proj')
 
-        self.proj_drop = keras.layers.Dropout(proj_drop)
+        self.qkv = keras.layers.Dense(self.dim * 3, use_bias=self.qkv_bias, name='qkv')
+        self.attn_drop = keras.layers.Dropout(self.attn_drop)
+        self.proj = keras.layers.Dense(self.dim, name='proj')
+
+        self.proj_drop = keras.layers.Dropout(self.proj_drop)
 
         self.softmax = keras.layers.Softmax(axis=-1)
 
-    def build(self, input_shape):
+    # todo :
+    def build(self, input_shape=None):
         self.relative_position_bias_table = self.add_weight(
             shape=((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), self.num_heads),
             initializer=keras.initializers.TruncatedNormal(stddev=0.02),
             name="relative_position_bias_table"
         )  # 2*Wh-1 * 2*Ww-1, nH
 
+    # def compute_output_shape(self, input_shape):
+    #     return input_shape
+
     def call(self, x, mask=None):
         """
         Args:
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
+        Returns:
+             x: (num_windows*B, N, C)
         """
+
         input_shape = tf.shape(x)
         b, n, c = input_shape[0], input_shape[1], input_shape[2]
         qkv = self.qkv(x)
@@ -287,19 +263,27 @@ class WindowAttention(keras.layers.Layer):
 
         x = tf.matmul(attn, v)
         x = tf.transpose(x, perm=[0, 2, 1, 3])
-        x = tf.reshape(x, [b, n, c])
+        x = tf.reshape(x, [b, n, c]) # [num_windows*B, N, C]
         x = self.proj(x)  # z = self.proj(x)
         x = self.proj_drop(x)
         return x
 
-    def extra_repr(self) -> str:
-        return f'dim={self.dim}, window_size={self.window_size}, num_heads={self.num_heads}'
 
+# wa = WindowAttention(dim=256,window_size=(8,8), num_heads=4)
+# wa.compute_output_shape([None,None,256])
+# wa.build([None,None,256])
+# wa(tf.random.normal([32*32,64,256]))
+# wa
+# inputs = keras.Input([32*32,64,256])
+# model = keras.Model(inputs=inputs, outputs=wa(inputs))
+# model(tf.random.normal([32*32,64,256]))
 
 class RDG(keras.layers.Layer):
     def __init__(self, dim, input_resolution, depth, num_heads, window_size, shift_size, mlp_ratio, qkv_bias, qk_scale,
                  drop, attn_drop, drop_path, norm_layer, gc, patch_size, img_size, **kwargs):
         super(RDG, self).__init__(**kwargs)
+        self.dim = dim
+        self.gc = gc
 
         self.swin1 = SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
                                           num_heads=num_heads, window_size=window_size,
@@ -354,14 +338,14 @@ class RDG(keras.layers.Layer):
         self.lrelu = keras.layers.LeakyReLU(alpha=0.2)
 
         ### no weight.
-        self.pe = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim,
-            norm_layer=None)
+        self.pe = PatchEmbed()
 
-        self.pue = PatchUnEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=0, embed_dim=dim,
-            norm_layer=None)
+        self.pue = PatchUnEmbed(embed_dim=dim)
         ### no weight.
+
+    # def compute_output_shape(self, input_shape):
+    #     batch_size = input_shape[0]
+    #     return tf.TensorShape([batch_size, None, self.dim])
 
     def call(self, x, x_size=None, training=False):
         x1 = self.pe(self.lrelu(self.adjust1(self.pue(self.swin1(x, x_size=x_size, training=training), x_size=x_size))))
@@ -406,53 +390,105 @@ class SwinTransformerBlock(keras.layers.Layer):
         self.window_size = window_size
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
-        if min(self.input_resolution) <= self.window_size:
-            # if window size is larger than input resolution, we don't partition windows
-            self.shift_size = 0
-            self.window_size = min(self.input_resolution)
+        self.norm_layer = norm_layer
+        self.qkv_bias = qkv_bias
+        self.qk_scale = qk_scale
+        self.drop = drop
+        self.attn_drop = attn_drop
+        self.drop_path = drop_path
+        self.act_layer = act_layer
+        # if min(self.input_resolution) <= self.window_size:
+        #     # if window size is larger than input resolution, we don't partition windows
+        #     self.shift_size = 0
+        #     self.window_size = min(self.input_resolution)
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
-
-        self.norm1 = norm_layer(epsilon=1e-5, name='norm1')
-        self.attn = WindowAttention(
-            dim, window_size=(self.window_size, self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop, name='attn')
-
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else keras.layers.Identity()
-        self.norm2 = norm_layer(epsilon=1e-5, name='norm2')
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop, name='mlp')
 
         # if self.shift_size > 0:
         #     self.attn_mask = tf.constant(self.calculate_mask(self.input_resolution))
         # else:
         #     self.attn_mask = None
 
+        self.norm1 = self.norm_layer(epsilon=1e-5, name='norm1')
+        self.attn = WindowAttention(
+            self.dim, window_size=(self.window_size, self.window_size), num_heads=self.num_heads,
+            qkv_bias=self.qkv_bias, qk_scale=self.qk_scale, attn_drop=self.attn_drop, proj_drop=self.drop, name='attn')
+
+        self.drop_path = DropPath(self.drop_path) if self.drop_path > 0. else keras.layers.Identity()
+        self.norm2 = self.norm_layer(epsilon=1e-5, name='norm2')
+        mlp_hidden_dim = int(self.dim * self.mlp_ratio)
+        self.mlp = Mlp(in_features=self.dim, hidden_features=mlp_hidden_dim, act_layer=self.act_layer, drop=self.drop, name='mlp')
+
+    # def build(self, input_shape):
+    #     self.norm1 = self.norm_layer(epsilon=1e-5, name='norm1')
+    #     self.attn = WindowAttention(
+    #         self.dim, window_size=(self.window_size, self.window_size), num_heads=self.num_heads,
+    #         qkv_bias=self.qkv_bias, qk_scale=self.qk_scale, attn_drop=self.attn_drop, proj_drop=self.drop, name='attn')
+    #
+    #     self.drop_path = DropPath(self.drop_path) if self.drop_path > 0. else keras.layers.Identity()
+    #     self.norm2 = self.norm_layer(epsilon=1e-5, name='norm2')
+    #     mlp_hidden_dim = int(self.dim * self.mlp_ratio)
+    #     self.mlp = Mlp(in_features=self.dim, hidden_features=mlp_hidden_dim, act_layer=self.act_layer, drop=self.drop, name='mlp')
+
+    # @tf.function(jit_compile=False)
     def calculate_mask(self, x_size):
         # calculate attention mask for SW-MSA
         H, W = x_size[0], x_size[1]
-        img_mask = np.zeros((1, H, W, 1))  # 1 H W 1
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w, :] = cnt
-                cnt += 1
+        img_mask = tf.zeros((H, W), dtype=tf.int32)  # 1 H W 1
 
+        # h_slices = (slice(0, -self.window_size),
+        #             slice(-self.window_size, -self.shift_size),
+        #             slice(-self.shift_size, None))
+        # w_slices = (slice(0, -self.window_size),
+        #             slice(-self.window_size, -self.shift_size),
+        #             slice(-self.shift_size, None))
+        # cnt = 0
+        # for h in h_slices:
+        #     for w in w_slices:
+        #         img_mask[:, h, w, :] = cnt
+        #         cnt += 1
+
+
+
+        cnt = tf.range(9)
+
+        h_slices = tf.convert_to_tensor([[tf.constant(0), tf.subtract(H,self.window_size)],
+                                [H - self.window_size, H -self.shift_size],
+                                [H -self.shift_size, H]], dtype=tf.int32)
+        w_slices = tf.convert_to_tensor([[tf.constant(0), W - self.window_size],
+                                [W - self.window_size, W -self.shift_size],
+                                [W -self.shift_size, W]], dtype=tf.int32)
+
+        for i in range(3):
+            for j in range(3):
+                row_start = h_slices[i,0]
+                row_end = h_slices[i,1]
+                col_start = w_slices[j,0]
+                col_end = w_slices[j,1]
+                row_indices, col_indices = tf.meshgrid(tf.range(row_start, row_end), tf.range(col_start, col_end),indexing='ij')
+                indices = tf.stack([tf.reshape(row_indices, [-1]), tf.reshape(col_indices, [-1])], axis=1)
+
+                indices_shape = tf.shape(indices)
+                img_mask = tf.cond(tf.greater(indices_shape[0], 0), lambda : tf.tensor_scatter_nd_update(img_mask, indices, tf.repeat(cnt[3 * i + j], indices_shape[0])),lambda: img_mask )
+                # img_mask = tf.cond(tf.reduce_prod(indices_shape)> 0, lambda : tf.tensor_scatter_nd_update(img_mask, indices, tf.repeat(cnt[3*i+j], indices_shape[0])), lambda: img_mask)
+
+        img_mask = img_mask[None,:,:,None]
         mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = np.reshape(mask_windows, [-1, self.window_size * self.window_size])
+        mask_windows = tf.reshape(mask_windows, [-1, self.window_size * self.window_size])
         attn_mask = mask_windows[:, None] - mask_windows[:, :, None]
-        attn_mask = np.where(attn_mask == 0, 0.0, -100.0)
+        attn_mask = tf.where(attn_mask == 0, 0.0, -100.0)
         return attn_mask
 
+
+    # def compute_output_shape(self, input_shape):
+    #     b, c = input_shape
+    #     return tf.TensorShape([b, None, c])
+
     def call(self, x, x_size, training=False):
+
         H, W = x_size[0], x_size[1]
+
         input_shape = tf.shape(x)
-        b, l, c = input_shape[0], input_shape[1], input_shape[2]
+        b, l, c = input_shape[0], input_shape[1], input_shape[2] # [b, height * width , hidden dim]
         # assert L == H * W, "input feature has wrong size"
 
         shortcut = x
@@ -466,7 +502,7 @@ class SwinTransformerBlock(keras.layers.Layer):
             shifted_x = x
 
         # partition windows
-        x_windows = window_partition_layer(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = tf.reshape(x_windows,
                                [-1, self.window_size * self.window_size, c])  # nW*B, window_size*window_size, C
 
@@ -481,7 +517,8 @@ class SwinTransformerBlock(keras.layers.Layer):
         # attn_windows = self.func1(x_windows, x_size)
 
         # todo: mask 는 input image의 사이즈가 고정되면 고정적으로 사용 할수 있다.
-        attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size))
+        mask = tf.cast(self.calculate_mask(x_size), tf.float32)
+        attn_windows = self.attn(x_windows, mask=mask) # num_windows*B, N, C
 
         # merge windows
         attn_windows = tf.reshape(attn_windows, [-1, self.window_size, self.window_size, c])
@@ -499,18 +536,6 @@ class SwinTransformerBlock(keras.layers.Layer):
         x = x + self.drop_path(self.mlp(self.norm2(x)), training=training)
 
         return x
-
-    # @tf.function
-    # def func1(self, x_windows, x_size):
-    #     if tf.reduce_all(tf.equal(self.input_resolution, x_size)):
-    #         attn_windows = self.attn(x_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
-    #     else:
-    #         attn_windows = self.attn(x_windows, mask=self.calculate_mask(x_size))
-    #     return attn_windows
-
-    def extra_repr(self) -> str:
-        return f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, " \
-               f"window_size={self.window_size}, shift_size={self.shift_size}, mlp_ratio={self.mlp_ratio}"
 
     def flops(self):
         flops = 0
@@ -543,6 +568,10 @@ class PatchMerging(keras.layers.Layer):
         self.norm = norm_layer(epsilon=1e-5, )
         self.reduction = keras.layers.Dense(2 * dim, use_bias=False)
 
+    # def compute_output_shape(self, x_shape):
+    #     b, c  = x_shape[0], x_shape[2]
+    #     return tf.TensorShape([b, None, c*4])
+
     def call(self, x):
         """
         x: b, h*w, c
@@ -560,48 +589,36 @@ class PatchMerging(keras.layers.Layer):
         x2 = x[:, 0::2, 1::2, :]  # b h/2 w/2 c
         x3 = x[:, 1::2, 1::2, :]  # b h/2 w/2 c
         x = tf.concat([x0, x1, x2, x3], -1)  # b h/2 w/2 4*c
-        x = tf.reshape(x, [b, -1, 4 * c])  # b h/2*w/2 4*c
+        x = tf.reshape(x, [b, -1, c*4])  # b h/2*w/2 4*c
 
         x = self.norm(x)
         x = self.reduction(x)
 
         return x
 
+
+# https://github.com/microsoft/Swin-Transformer/blob/f82860bfb5225915aca09c3227159ee9e1df874d/models/swin_mlp.py#L300
+# super-resolution task라서 원래의 코드와 비교해 patch siz = 1 인 특수한 상황이라고 볼수 있을 것 같다.
+# 사실상 PatchEmbedding이라고 볼수 없음.
 class PatchEmbed(keras.layers.Layer):
     r""" Image to Patch Embedding
 
     Args:
-        img_size (int): Image size.  Default: 224.
-        patch_size (int): Patch token size. Default: 4.
-        in_chans (int): Number of input image channels. Default: 3.
-        embed_dim (int): Number of linear projection output channels. Default: 96.
         norm_layer (nn.Module, optional): Normalization layer. Default: None
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None, **kwargs):
+    def __init__(self, norm_layer=None, **kwargs):
         super().__init__(**kwargs)
-        img_size = (img_size, img_size)
-        patch_size = (patch_size, patch_size)
-        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.patches_resolution = patches_resolution
-        self.num_patches = patches_resolution[0] * patches_resolution[1]
-
-        self.in_chans = in_chans
-        self.embed_dim = embed_dim
-
         if norm_layer is not None:
             self.norm = norm_layer
         else:
             self.norm = None
 
-    def compute_output_shape(self, input_shape):
-        b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
-        return tf.TensorShape([b, h * w, c])
+    # def compute_output_shape(self, x_shape):
+    #     b, c  = x_shape[0], x_shape[3]
+    #     return tf.TensorShape([b, None, c])
 
     def call(self, x):
-
         input_shape = tf.shape(x)
         b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
         x = tf.reshape(x, [b, h * w, c])
@@ -610,6 +627,11 @@ class PatchEmbed(keras.layers.Layer):
             x = self.norm(x)  # 归一化
         return x
 
+# embed = PatchEmbed()
+# embed.compute_output_shape([4, None,None,3])
+# inputs = keras.Input([None,None,3])
+# model = keras.Model(inputs=inputs, outputs=embed(inputs))
+# model(tf.random.normal([4,64,64,3]))
 
 class PatchUnEmbed(keras.layers.Layer):
     r""" Image to Patch Unembedding
@@ -622,22 +644,13 @@ class PatchUnEmbed(keras.layers.Layer):
         norm_layer (nn.Module, optional): 归一化层， 默认为N None.
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None, **kwargs):
+    def __init__(self, embed_dim,  **kwargs):
         super().__init__(**kwargs)
-        img_size = (img_size, img_size)  # 图像的大小，默认为 224*224
-        patch_size = (patch_size, patch_size)  # Patch token 的大小，默认为 4*4
-        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]  # patch 的分辨率
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.patches_resolution = patches_resolution
-        self.num_patches = patches_resolution[0] * patches_resolution[1]  # patch 的个数，num_patches
+        self.embed_dim = embed_dim
 
-        self.in_chans = in_chans  # 输入图像的通道数
-        self.embed_dim = embed_dim  # 线性 projection 输出的通道数
-
-    def compute_output_shape(self, input_shape):
-        b, h, w, c = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
-        return tf.TensorShape([b, h * w, c])
+    # def compute_output_shape(self, x_shape):
+    #     batch_size  = x_shape[0]
+    #     return tf.TensorShape([batch_size, None, None, self.embed_dim])
 
     def call(self, x, x_size):
         input_shape = tf.shape(x)  # 输入 x 的结构
@@ -651,6 +664,10 @@ class PixelShuffle(keras.layers.Layer):
     def __init__(self, scale, **kwargs):
         self.scale = scale
         super(PixelShuffle, self).__init__(**kwargs)
+
+    # def compute_output_shape(self, input_shape):
+    #     b, h, w, c  = input_shape[0], input_shape[1], input_shape[2], input_shape[3]
+    #     return tf.TensorShape([b, None,None, c // (self.scale**2)])
 
     def call(self, x):
         input_shape = tf.shape(x)
@@ -685,7 +702,6 @@ class Upsample(keras.Sequential):
         else:
             raise ValueError(f'scale {scale} is not supported. ' 'Supported scales: 2^n and 3.')
 
-
 # type: DRCT
 # upscale: 4
 # in_chans: 3
@@ -702,11 +718,10 @@ class Upsample(keras.Sequential):
 # mlp_ratio: 2
 # upsampler: 'pixelshuffle'
 # resi_connection: '1conv'
-
 class DRCT(keras.models.Model):
     def __init__(self,
+                 input_specs: keras.layers.InputSpec = keras.layers.InputSpec(shape=[None, None, None, 3]),
                  img_size=64,
-                 fixed_shape=True,
                  patch_size=1,
                  in_chans=3,
                  embed_dim=96,
@@ -734,13 +749,10 @@ class DRCT(keras.models.Model):
                  gc=32,
                  **kwargs
                  ):
-        super(DRCT, self).__init__(**kwargs)
-
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.overlap_ratio = overlap_ratio
         self.img_size = img_size
-        self.fixed_shape = fixed_shape
         num_in_ch = in_chans
         num_out_ch = in_chans
         num_feat = 64
@@ -755,8 +767,28 @@ class DRCT(keras.models.Model):
         self.upscale = upscale
         self.upsampler = upsampler
 
+        # ------------------------- 0, input ------------------------- #
+
+        x = inputs = keras.Input(shape=input_specs.shape[1:])
+        x = (x - self.mean) * self.img_range
+
+        if tf._tf_uses_legacy_keras:
+            input_shape = tf.shape(inputs) #.shape
+            h, w = inputs.shape[1:3]
+            if h and w :
+                assert h == w, "height and width must be same. (square)"
+        else :
+            input_shape = inputs.shape# .shape
+            # todo : keras 3 에서는 tf.shape 를 사용할수 없네 ..
+            h, w = input_shape[1], input_shape[2]
+            if None in input_shape[1:]:
+                raise ValueError("You are using keras3. Input shape must be specific. Please set input_specs = keras.layers.InputSpec(shape=[b, h, w, 3])")
+            else:
+                assert h == w, "height and width must be same. (square)"
+
         # ------------------------- 1, shallow feature extraction ------------------------- #
-        self.conv_first = keras.layers.Conv2D(embed_dim, kernel_size=3, padding='same', name='conv_first')
+
+        x = residual = keras.layers.Conv2D(embed_dim, kernel_size=3, padding='same', name='conv_first')(x)
 
         # ------------------------- 2, deep feature extraction ------------------------- #
         self.num_layers = len(depths)
@@ -767,101 +799,80 @@ class DRCT(keras.models.Model):
         self.mlp_ratio = mlp_ratio
 
         # split image into non-overlapping patches
-        self.patch_embed = PatchEmbed(
-            img_size=img_size,
-            patch_size=patch_size,
-            in_chans=embed_dim,
-            embed_dim=embed_dim,
+        x = PatchEmbed(
             norm_layer=norm_layer(epsilon=1e-5, name='norm') if self.patch_norm else None,
-        )
-
-        num_patches = self.patch_embed.num_patches
-        patches_resolution = self.patch_embed.patches_resolution
-        self.patches_resolution = patches_resolution
+        )(x)
 
         # merge non-overlapping patches into image
 
         # absolute position embedding
         # warning : super-resolution task 에서는 아예 쓰지 않는다.
-        if self.ape:
-            self.absolute_pos_embed = self.add_weight(shape=[1, num_patches, embed_dim],
-                                                      initializer=keras.initializers.TruncatedNormal(stddev=0.02))
+        # if self.ape:
+        #     # assert (input_specs.shape[1] and input_specs.shape[2]) is not None, \
+        #     #     "Input_specs must be [None, height, width, 3]. " \
+        #     #     "Please set specific height, width."
+        #
+        #     img_size = (img_size, img_size)
+        #     patch_size = (patch_size, patch_size)
+        #     patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
+        #     self.img_size = img_size
+        #     self.patch_size = patch_size
+        #     self.patches_resolution = patches_resolution
+        #     self.num_patches = patches_resolution[0] * patches_resolution[1]
+        #     self.absolute_pos_embed = self.add_weight(shape=[1, self.num_patches, embed_dim],
+        #                                               initializer=keras.initializers.TruncatedNormal(stddev=0.02))
 
-        self.pos_drop = keras.layers.Dropout(rate=drop_rate)
+        x = keras.layers.Dropout(rate=drop_rate)(x)
 
         # stochastic depth
         dpr = [v for v in np.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
-        # build
-        self.body = []
+        x_size = (input_shape[1], input_shape[2])
         for i_layer in range(self.num_layers):
-            body_layer = RDG(dim=embed_dim, input_resolution=(patches_resolution[0], patches_resolution[1]),
+            x = RDG(dim=embed_dim, input_resolution=(img_size, img_size),
                              num_heads=num_heads[i_layer], window_size=window_size, depth=0,
                              shift_size=window_size // 2, mlp_ratio=mlp_ratio,
                              qkv_bias=qkv_bias, qk_scale=qk_scale, drop=drop_rate, attn_drop=attn_drop_rate,
                              drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
                              norm_layer=norm_layer, gc=gc, img_size=img_size,
-                             patch_size=patch_size)  # x : [b, 4096,96] x_size : [64,64]
-            self.body.append(body_layer)
-        self.body_norm = norm_layer(epsilon=1e-5, name='norm')
-        self.patch_unembed = PatchUnEmbed(
-            img_size=img_size,
-            patch_size=patch_size,
-            in_chans=embed_dim,
-            embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
+                             patch_size=patch_size)(x=x, x_size=x_size)  # x : [b, 4096,96] x_size : [64,64]
+        x = keras.layers.LayerNormalization(epsilon=1e-5, name='body_norm')(x)
+        x = PatchUnEmbed(embed_dim=embed_dim)(x=x, x_size=x_size)
 
         # build the last conv layer in deep feature extraction
         if resi_connection == '1conv':
-            self.conv_after_body = keras.layers.Conv2D(embed_dim, kernel_size=3, padding='same', name='conv_after_body')
+            x = keras.layers.Conv2D(embed_dim, kernel_size=3, padding='same', name='conv_after_body')(x) + residual
         elif resi_connection == 'identity':
-            self.conv_after_body = keras.layers.Identity()
+            x = keras.layers.Identity()(x)
 
         # ------------------------- 3, high quality image reconstruction ------------------------- #
         if self.upsampler == 'pixelshuffle':
             # for classical SR
-            self.conv_before_upsample = keras.Sequential(
+            x = keras.Sequential(
                 [keras.layers.Conv2D(num_feat, kernel_size=3, padding='same', name='conv_before_upsample'),
-                 keras.layers.LeakyReLU(alpha=1e-2)])
-            self.upsample = Upsample(upscale, num_feat)
-            self.conv_last = keras.layers.Conv2D(num_out_ch, kernel_size=3, padding='same', name='conv_last')
+                 keras.layers.LeakyReLU(alpha=1e-2)])(x)
+            x = Upsample(upscale, num_feat)(x)
+            x = keras.layers.Conv2D(num_out_ch, kernel_size=3, padding='same', name='conv_last')(x)
+            outputs = x / self.img_range + self.mean
 
-    def forward_features(self, x, training=False):
-        input_shape = tf.shape(x)
-        if self.fixed_shape:
-            x_size = (self.img_size , self.img_size)
-        else :
-            h, w = input_shape[1], input_shape[2]
-            x_size = (h, w)
+        logging.info("*************************\n"
+                     "Restriction of algorithm\n"
+                     "Resolution must be\n"
+                     "1. multiple of window size.\n"
+                     "2. greater than 64.\n"
+                     "*************************")
 
-        x = self.patch_embed(x)
-        if self.ape:
-            x = x + self.absolute_pos_embed
-        x = self.pos_drop(x)
+        super().__init__(inputs=inputs, outputs=outputs)
 
-        for layer in self.body:
-            x = layer(x, x_size=x_size, training=training)
+    # def compute_output_shape(self, input_shape):
+    #     return tf.TensorShape([input_shape[0], input_shape[1]*self.upscale, input_shape[2]*self.upscale, input_shape[3]])
 
-        x = self.body_norm(x)  # b seq_len c
-        x = self.patch_unembed(x, x_size=x_size)
+    def call(self, inputs, **kwargs):
+        b, h, w, c = inputs.shape
+        assert h % self.window_size ==0  and w % self.window_size==0, f"Input resolution must be multiple of window size{self.window_size}."
+        assert (h and w) >= 64, f"Input resolution must be greater than 64."
 
-        return x  # [1, 272, 272, 180]
-
-    def call(self, x, training=False):
-        # self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
-
-        if self.upsampler == 'pixelshuffle':
-            # for classical SR
-            x = residual = self.conv_first(x)
-            x = self.forward_features(x, training=training)
-            x = self.conv_after_body(x) + residual
-            x = self.conv_before_upsample(x)
-            x = self.conv_last(self.upsample(x))
-
-        x = x / self.img_range + self.mean
-
-        return x
+        return super().call(inputs, **kwargs)
 
     def predict_dynamic_shape(self,
                               low_resolution_image):
@@ -880,8 +891,7 @@ class DRCT(keras.models.Model):
 
         # ***todo : 이부분 설명
         window_size = self.window_size
-        h_old = low_resolution_image.shape[0]
-        w_old = low_resolution_image.shape[1]
+        h_old, w_old, c = low_resolution_image.shape
         h_pad = (h_old // window_size + 1) * window_size - h_old
         w_pad = (w_old // window_size + 1) * window_size - w_old
 
@@ -901,9 +911,7 @@ class DRCT(keras.models.Model):
             self,
             low_resolution_image,
             batch_size=1,
-            patches_size=64,
             padding = 24,
-            pad_size = 15,
     ):
         """
         :param low_resolution_image: numpy array of Single Image. It is not batched.
@@ -913,15 +921,14 @@ class DRCT(keras.models.Model):
         :param batch_size:
         :return:
         """
-
-
-        # low_resolution_image = pad_reflect(low_resolution_image, pad_size)
-        patches, p_shape = split_image_into_overlapping_patches(low_resolution_image, patch_size=patches_size, overlap_size=padding)
+        h = self.input_spec[0].shape[1]
+        patches, p_shape = split_image_into_overlapping_patches(low_resolution_image, patch_size=h, overlap_size=padding)
         patches = patches / 255
         num_of_patch = patches.shape[0]
         result = []
         for i in tqdm.trange(0, num_of_patch, batch_size):
             result += [self.predict_on_batch(patches[i:i + batch_size])]
+            # todo : self(patches[i:i + batch_size])
 
         result_concat = np.concatenate(result, axis=0)
         sr_image = result_concat.clip(0, 1)
@@ -934,10 +941,5 @@ class DRCT(keras.models.Model):
         )
         np_sr_image = np.clip(np_sr_image, 0, 1)
         sr_img = (np_sr_image * 255).astype(np.uint8)
-        # sr_img = unpad_image(sr_img, pad_size * self.upscale)
 
         return sr_img
-
-    # todo 1.dynamic shape 대한 predict
-    # todo 2.fixed shape 대한 predict
-    # todo 3.window 경계가 별로 깔끔하지 않은데 .. 기존의 pytorch 코드로 돌려봐도 그런 결과인데 어쩔수 없는 한계이려나

@@ -204,7 +204,10 @@ class RRDBNet(keras.Model):
         :param batch_size:
         :return:
         """
-        assert self.input_spec
+        input_shape = self.input_spec[0].shape
+        h, w = input_shape[1:3]
+        assert h == w, "height and width must be same. (square)"
+        assert patches_size+ 2*padding == h, "patches_size + 2 x padding equal to height of model input."
 
         low_resolution_image = pad_reflect(low_resolution_image, pad_size)
         patches, p_shape = split_image_into_overlapping_patches(low_resolution_image, patch_size=patches_size, overlap_size=padding)

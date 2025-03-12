@@ -6,8 +6,8 @@ from official.modeling import hyperparams
 
 @dataclasses.dataclass
 class RRDBNET(hyperparams.Config):
-    img_width: int = 64
-    img_height: int = 64
+    img_width: int = 240
+    img_height: int = 240
     hidden_dim : int = 64
     num_block: int = 23
     body_hidden_dim:int = 32
@@ -15,7 +15,8 @@ class RRDBNET(hyperparams.Config):
 
 WEIGHT_PATH = {
 
-        "x2": {"config": RRDBNET(upscale=2), "path": "spydr1/realesrgan/keras/x2"} ,
+        # todo : input에 대해 "space_to_depth" 적용해서  -> [batch_size, h//2,w//2, 3 * 2 * 2] 의 형식이 되어서 .. 일관되지 않으니까 일단 빼기
+        # "x2": {"config": RRDBNET(upscale=2), "path": "spydr1/realesrgan/keras/x2"} ,
         "x4": {"config": RRDBNET(upscale=4), "path": "spydr1/realesrgan/keras/x4"},
         "x8": {"config": RRDBNET(upscale=8), "path": "spydr1/realesrgan/keras/x8"},
 }
