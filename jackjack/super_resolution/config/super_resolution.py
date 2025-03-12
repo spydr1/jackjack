@@ -8,7 +8,7 @@ from official.modeling import optimization
 from official.vision.configs import common
 
 from jackjack.super_resolution.config import backbones
-from jackjack.super_resolution.legacy.drct.config import DRCT, DRCT_L
+from jackjack.super_resolution.legacy.drct.config import DRCT_L
 
 
 @dataclasses.dataclass

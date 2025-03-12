@@ -5,6 +5,13 @@ A. Linux
 1. Follow the official document.
 https://www.tensorflow.org/install/source?hl=ko&_gl=1*1k1bqne*_up*MQ..*_ga*MjA1Njc0NzE3Mi4xNzQxNzcxNzU5*_ga_W0YLR4190T*MTc0MTc3MTc1OS4xLjAuMTc0MTc3MTc1OS4wLjAuMA..#docker_linux_builds
 
+apt update
+apt-get install git -y
+
+
+apt-get install vim -y
+
+
 2. Run container
 2.1 GPU
 docker run --gpus all -it -w /tensorflow -v $PWD:/mnt -e HOST_PERMS="$(id -u):$(id -g)" tensorflow/tensorflow:2.16.1-gpu bash
@@ -16,7 +23,7 @@ docker run --gpus all -it -w /tensorflow -v $PWD:/mnt -e HOST_PERMS="$(id -u):$(
 ```
 git clone https://github.com/spydr1/jackjack.git
 cd jackjack
-python setup.py install
+pip install .
 ```
 
 # Run Predictor
