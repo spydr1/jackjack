@@ -1,0 +1,5 @@
+tensorflow==2.16.1
+tf_keras==2.16.0
+keras==3.0.5
+gin-config
+tf-models-official==2.16.0
