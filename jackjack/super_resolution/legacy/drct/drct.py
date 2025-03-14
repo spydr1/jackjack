@@ -911,7 +911,7 @@ class DRCT(keras.models.Model):
             self,
             low_resolution_image,
             batch_size=1,
-            padding = 24,
+            padding = 0,
     ):
         """
         :param low_resolution_image: numpy array of Single Image. It is not batched.
