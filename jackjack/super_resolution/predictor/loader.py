@@ -1,9 +1,7 @@
 import logging
 import time
-from typing import List
 
 import kagglehub
-import tensorflow as tf
 import tensorflow.keras as keras
 
 from official.modeling import hyperparams

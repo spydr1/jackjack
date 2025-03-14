@@ -3,11 +3,9 @@ BSD 3-Clause License
 https://github.com/ai-forever/Real-ESRGAN/blob/main/RealESRGAN/model.py
 """
 import os
-import logging
 import pathlib
 import tqdm
 
-import kagglehub
 import tensorflow as tf
 import tensorflow.keras as keras
 
